@@ -1,0 +1,12 @@
+.ipynb_checkpoints
+misc
+data*
+output*
+*.pth
+*.pt
+*.jit
+*.mp4
+*.swp
+*.ts
+*.m3u8
+setup_*.sh

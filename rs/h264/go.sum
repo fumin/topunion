@@ -1,0 +1,12 @@
+github.com/gen2brain/x264-go v0.2.4 h1:/+a2NpTOzek4JtM6TQfodqv/b+vUgR/RzP+REcDBWlY=
+github.com/gen2brain/x264-go v0.2.4/go.mod h1:E8NzifRRlIjgPiHeBrd2gDNl0aajri6uNc117BROuwA=
+github.com/gen2brain/x264-go v0.2.5-0.20230928084046-7604621870e3 h1:k+LBo/YY3lTWLtX4wxDY/fRRHhjI6T91xZZ+vtGGgwo=
+github.com/gen2brain/x264-go v0.2.5-0.20230928084046-7604621870e3/go.mod h1:E8NzifRRlIjgPiHeBrd2gDNl0aajri6uNc117BROuwA=
+github.com/gen2brain/x264-go/x264c v0.0.0-20221204084822-82ee2951dea2 h1:4GzTsZK/uG+tHvWR2ORcTCGTC4+mgOPhkUdz/Ro9alg=
+github.com/gen2brain/x264-go/x264c v0.0.0-20221204084822-82ee2951dea2/go.mod h1:MUMv+ZURlTO3qH8QAt2gxiIY5X4NMaxObz2ImZOMvyA=
+github.com/gen2brain/x264-go/yuv v0.0.0-20221204084822-82ee2951dea2 h1:lihaRUKRj94EWVZRp1jTmEiIxmvjEiSb9fJl2xftrXY=
+github.com/gen2brain/x264-go/yuv v0.0.0-20221204084822-82ee2951dea2/go.mod h1:PzzJntdOaVt4Gc37fNaEXpqmhKkUgd/xqyPMUfx+FQc=
+github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
+github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
+github.com/yapingcat/gomedia v0.0.0-20230905155010-55b9713fcec1 h1:ilNIuDBR+UKA3qefiyWRoFufIFn3E4tgEXbBM4ILH28=
+github.com/yapingcat/gomedia v0.0.0-20230905155010-55b9713fcec1/go.mod h1:WSZ59bidJOO40JSJmLqlkBJrjZCtjbKKkygEMfzY/kc=
