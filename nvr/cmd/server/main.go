@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"flag"
@@ -10,8 +11,10 @@ import (
 	"net/http"
 	"nvr"
 	"path/filepath"
+	"sort"
 	"sync"
 	"text/template"
+	"time"
 
 	"github.com/pkg/errors"
 )
@@ -19,6 +22,14 @@ import (
 var (
 	serverDir = flag.String("d", "server", "server directory")
 )
+
+func Quit(s *Server, w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := s.Server.Shutdown(ctx); err != nil {
+		log.Printf("%+v", err)
+	}
+}
 
 //go:embed index.html
 var indexHTML string
@@ -29,6 +40,7 @@ func Index(s *Server, w http.ResponseWriter, r *http.Request) {
 		RTSP []rtspInfo
 	}{}
 	page.RTSP = s.rtsp.All()
+	sort.Slice(page.RTSP, func(i, j int) bool { return page.RTSP[i].Name < page.RTSP[j].Name })
 	indexTmpl.Execute(w, page)
 }
 
@@ -42,7 +54,8 @@ type rtspInfo struct {
 	Port             int
 	Path             string
 
-	Pid int
+	Pid   int
+	Start time.Time
 }
 
 func (info rtspInfo) getLink() (string, error) {
@@ -63,9 +76,9 @@ func newRTSPMap() *rtspMap {
 	return m
 }
 
-func (m *rtspMap) Set(name string, info rtspInfo) {
+func (m *rtspMap) Set(info rtspInfo) {
 	m.Lock()
-	m.m[name] = info
+	m.m[info.Name] = info
 	m.Unlock()
 }
 
@@ -117,15 +130,60 @@ func NewServer(dir, addr string) (*Server, error) {
 func (s *Server) startRTSP(quit *nvr.Quiter, info rtspInfo) {
 	// ffmpeg -i "rtsp://localhost:8554/rtsp" -an -hls_time 10 -hls_list_size 0 -strftime 1 -hls_flags append_list+second_level_segment_duration -hls_segment_filename "ffmpeg/%Y%m%d_%H%M%S_%%06t.ts" "ffmpeg/out.m3u8"
 
+	const program = "ffmpeg"
+	const hlsFlags = "" +
+		// Append to the same HLS index file.
+		"append_list" +
+		// Use microseconds in segment filename.
+		"+second_level_segment_duration"
 	// ffmpeg quits by sending q.
-	shutdown := func(stdin io.WriteCloser) {
-		stdin.Write([]byte("q"))
+	shutdown := func(stdin io.WriteCloser) error {
+		n, err := stdin.Write([]byte("q"))
+		if err != nil {
+			return errors.Wrap(err, fmt.Sprintf("%d", n))
+		}
+		return nil
 	}
-	run := func(chan struct{}) error {
+
+	run := func(quit chan struct{}) error {
 		link, err := info.getLink()
 		if err != nil {
 			return errors.Wrap(err, "")
 		}
+
+		now := time.Now().In(time.UTC)
+		endT := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		endT = endT.AddDate(0, 0, 1)
+		duration := endT.Sub(now)
+
+		dayDir := filepath.Join(s.RTSPDir, now.Format("20060102"))
+		segmentFName := filepath.Join(dayDir, "%s_%%06t.ts")
+		indexFName := filepath.Join(dayDir, "index.m3u8")
+		arg := []string{
+			"-i", link,
+			// No audio.
+			"-an",
+			// 10 seconds per segment.
+			"-hls_time", "10",
+			// No limit on number of segments.
+			"-hls_list_size", "0",
+			// Use strftime syntax for segment filenames.
+			"-strftime", "1",
+			"-hls_flags", hlsFlags,
+			"-hls_segment_filename", segmentFName,
+			indexFName,
+		}
+
+		onStart := func(pid int) {
+			info.Pid = pid
+			info.Start = now
+			s.rtsp.Set(info)
+		}
+		outB, errB, err := nvr.RunProc(quit, onStart, duration, shutdown, program, arg...)
+		if err != nil {
+			return errors.Wrap(err, fmt.Sprintf("stdout: %s, stderr: %s", outB, errB))
+		}
+		return nil
 	}
 	quit.Loop(run)
 }
