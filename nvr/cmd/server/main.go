@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
-	"net"
 	"net/http"
 	"nvr"
 	"path/filepath"
@@ -45,6 +45,13 @@ type rtspInfo struct {
 	Pid int
 }
 
+func (info rtspInfo) getLink() (string, error) {
+	if info.Link != "" {
+		return info.Link, nil
+	}
+	return info.Link, nil
+}
+
 type rtspMap struct {
 	sync.RWMutex
 	m map[string]rtspInfo
@@ -74,6 +81,7 @@ func (m *rtspMap) All() []rtspInfo {
 
 type Server struct {
 	ServeMux *http.ServeMux
+	Server   http.Server
 
 	ScriptDir string
 	Scripts   nvr.Scripts
@@ -83,10 +91,11 @@ type Server struct {
 	rtsp *rtspMap
 }
 
-func NewServer(dir string) (*Server, error) {
+func NewServer(dir, addr string) (*Server, error) {
 	s := &Server{}
 	s.ServeMux = http.NewServeMux()
-	s.rtsp = newRTSPMap()
+	s.Server.Addr = addr
+	s.Server.Handler = s.ServeMux
 
 	s.ScriptDir = filepath.Join(dir, "script")
 	var err error
@@ -97,33 +106,28 @@ func NewServer(dir string) (*Server, error) {
 
 	s.RTSPDir = filepath.Join(dir, "rtsp")
 
+	s.rtsp = newRTSPMap()
+
+	handleFunc(s, "/Quit", Quit)
 	handleFunc(s, "/", Index)
 
 	return s, nil
 }
 
-func (s *Server) startRTSP(info rtspInfo) {
-	go func() {
-		outDir := filepath.Join(s.RTSPDir, info.Name)
-		for {
-			// ffmpeg -i "rtsp://localhost:8554/rtsp" -an -hls_time 10 -hls_list_size 0 -strftime 1 -hls_flags second_level_segment_duration -hls_segment_filename "ffmpeg/%Y%m%d_%H%M%S_%%06t.ts" "ffmpeg/out.m3u8"
-			p, err := nvr.NewRTSPProc(outDir, info.Link, info.NetworkInterface, info.MacAddress, info.Username, info.Password, info.Port, info.Path)
-			if err != nil {
-				log.Printf("%+v", err)
-				continue
-			}
-			info.Pid = p.Cmd.Process.Pid
-			s.rtsp.Set(info.Name, info)
+func (s *Server) startRTSP(quit *nvr.Quiter, info rtspInfo) {
+	// ffmpeg -i "rtsp://localhost:8554/rtsp" -an -hls_time 10 -hls_list_size 0 -strftime 1 -hls_flags append_list+second_level_segment_duration -hls_segment_filename "ffmpeg/%Y%m%d_%H%M%S_%%06t.ts" "ffmpeg/out.m3u8"
 
-			<-time.After(30 * time.Second)
-
-			go func() {
-				if err := p.Quit(); err != nil {
-					log.Printf("%+v", err)
-				}
-			}()
+	// ffmpeg quits by sending q.
+	shutdown := func(stdin io.WriteCloser) {
+		stdin.Write([]byte("q"))
+	}
+	run := func(chan struct{}) error {
+		link, err := info.getLink()
+		if err != nil {
+			return errors.Wrap(err, "")
 		}
-	}()
+	}
+	quit.Loop(run)
 }
 
 func handleFunc(s *Server, httpPath string, fn func(*Server, http.ResponseWriter, *http.Request)) {
@@ -166,7 +170,8 @@ func main() {
 }
 
 func mainWithErr() error {
-	server, err := NewServer(*serverDir)
+	addr := ":8080"
+	server, err := NewServer(*serverDir, addr)
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
@@ -175,17 +180,16 @@ func mainWithErr() error {
 		Name: "vlc",
 		Link: "rtsp://localhost:8554/rtsp",
 	}
-	server.startRTSP(vlc)
+	vlcRTSPQuiter := nvr.NewQuiter()
+	server.startRTSP(vlcRTSPQuiter, vlc)
 
-	port := 8080
-	addr := fmt.Sprintf(":%d", port)
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return errors.Wrap(err, "")
+	log.Printf("listening at %s", server.Server.Addr)
+	if err := server.Server.ListenAndServe(); err != http.ErrServerClosed {
+		log.Printf("%+v", err)
 	}
-	log.Printf("listening at %s", addr)
-	if err := http.Serve(listener, server.ServeMux); err != nil {
-		return errors.Wrap(err, "")
+
+	if err := vlcRTSPQuiter.Quit(); err != nil {
+		log.Printf("%+v", err)
 	}
 
 	return nil
