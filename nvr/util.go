@@ -63,6 +63,7 @@ func (q *Quiter) Loop(fn func(chan struct{}) error) {
 			select {
 			case <-q.req:
 				q.resp <- err
+				return
 			default:
 			}
 		}
