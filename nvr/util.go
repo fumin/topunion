@@ -12,39 +12,22 @@ import (
 )
 
 type ByteQueue struct {
-	size int
 	q *deque.Deque[byte]
-	b []byte
 }
 
 func NewByteQueue(size int) *ByteQueue {
-	const traySize = 1024
-	q := &ByteQueue{size: size}
-	q.q = deque.Make[byte](size + traySize)
-	q.b = make([]byte, traySize)
+	q := &ByteQueue{}
+	q.q = deque.Make[byte](size)
 	return q
 }
 
-func (q *ByteQueue) ReadFrom(r io.Reader) (int, error) {
-	n, err := r.Read(q.b)
-	if err != nil {
-		return n, errors.Wrap(err, "")
-	}
-	q.q.PushBackSlice(q.b[:n])
+func (q *ByteQueue) Write(p []byte) (int, error) {
+	q.q.PushBackSlice(p)
 
 	for q.q.Len() > q.size {
 		q.q.RemoveFront()
 	}
-	return n, nil
-}
-
-func (q *ByteQueue) ReadTillEOF(r io.Reader) {
-	for {
-		_, err := q.ReadFrom(r)
-		if err == io.EOF {
-			return
-		}
-	}
+	return len(p), nil
 }
 
 func (q *ByteQueue) Slice() []byte {
@@ -69,7 +52,7 @@ func (q *Quiter) Loop(fn func(chan struct{}) error) {
 		for {
 			err := fn(q.req)
 			if err != nil {
-				// Only print errors every interval to prevent constantly failing functions overwhelming our logs.
+				// Only print errors intermitently to prevent constantly failing functions from overwhelming our logs.
 				now := time.Now()
 				if now.Sub(lastLogT) > time.Minute {
 					lastLogT = now
@@ -92,10 +75,10 @@ func (q *Quiter) Quit() error {
 }
 
 type runError struct {
-	wait error
+	wait     error
 	shutdown error
-	cleanup error
-	kill error
+	cleanup  error
+	kill     error
 }
 
 func (err runError) Error() string {
@@ -134,91 +117,42 @@ func (err runError) orNil() error {
 	return nil
 }
 
-func RunProc(quit chan struct{}, onStart func(int), duration time.Duration, shutdown func(stdin io.WriteCloser) error, program string, arg ...string) ([]byte, []byte, error) {
-	stdinR, stdinW, err := os.Pipe()
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "")
-	}
-	defer stdinR.Close()
-	defer stdinW.Close()
-	childFiles := make([]*os.File, 0, 3)
-	pa := &os.ProcAttr{}
-	pa.Files = childFiles
-	pa.Env, _ = os.Environ()
-	argv := append([]string{program}, arg...)
-	proc, err := os.StartProcess(program, argv, pa)
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "")
-	}
+func RunProc(quit chan struct{}, duration time.Duration, shutdown func() error, startedCmd *exec.Cmd) error {
+	exited := make(chan struct{})
+	exitC := make(chan runError)
+	go func() {
+		var xt runError
+		defer func() { exitC <- xt }()
 
-	// Collect stdout and stderr in the background.
-	kill := make(chan struct{})
-	defer close(kill)
-	const stdouterrSize = 4*1024
-	stdoutC := make(chan []byte)
-	go func() {
-		q := NewByteQueue(stdouterrSize)
-		q.ReadTillEOF(stdout)
 		select {
-		case <-kill:
-		case stdoutC <- q.Slice():
+		case <-exited:
+			return
+		case <-quit:
+		case <-time.After(duration):
 		}
-	}()
-	stderrC := make(chan []byte)
-	go func() {
-		q := NewByteQueue(stdouterrSize)
-		q.ReadTillEOF(stderr)
+		xt.shutdown = shutdown()
+
+		// Wait a while for the process to exit.
+		const exitWaitSecs = 3
 		select {
-		case <-kill:
-		case stderrC <- q.Slice():
+		case <-exited:
+			return
+		case <-time.After(exitWaitSecs * time.Second):
 		}
+		xt.cleanup = errors.Errorf("unable to exit in %d seconds", exitWaitSecs)
+
+		// Force kill.
+		xt.kill = cmd.Process.Kill()
 	}()
 
-	if err := cmd.Start(); err != nil {
-		return nil, nil, errors.Wrap(err, "")
-	}
-	onStart(cmd.Process.Pid)
+	var err runError
+	err.wait = cmd.Wait()
+	close(exited)
 
-	type outErrWait struct {
-		stdout []byte
-		stderr []byte
-		wait error
-	}
-	waitC := make(chan outErrWait)
-	go func() {
-		var oew outErrWait
-		oew.stdout = <-stdoutC
-		oew.stderr = <-stderrC
-		oew.wait = cmd.Wait()
-		select {
-		case <-kill:
-		case waitC <- oew:
-		}
-	}()
+	xt := <-exitC
+	err.shutdown = xt.shutdown
+	err.cleanup = xt.cleanup
+	err.kill = xt.kill
 
-	var runErr runError
-	// Let process run for either its duration or early quited.
-	select {
-	case oew := <-waitC:
-		runErr.wait = oew.wait
-		return oew.stdout, oew.stderr, runErr.orNil()
-	case <-time.After(duration):
-	case <-quit:
-	}
-
-	// Attempt to cleanly stop process.
-	runErr.shutdown = shutdown(stdin)
-	// Wait a while for the process to exit.
-	const exitWaitSecs = 3
-	select {
-	case oew := <-waitC:
-		runErr.wait = oew.wait
-		return oew.stdout, oew.stderr, runErr.orNil()
-	case <-time.After(exitWaitSecs * time.Second):
-		runErr.cleanup = errors.Errorf("unable to exit in %d seconds", exitWaitSecs)
-	}
-
-	// Force kill process.
-	runErr.kill = cmd.Process.Kill()
-	return nil, nil, runErr.orNil()
+	return err.orNil()
 }

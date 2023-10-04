@@ -6,10 +6,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"nvr"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -136,15 +136,6 @@ func (s *Server) startRTSP(quit *nvr.Quiter, info rtspInfo) {
 		"append_list" +
 		// Use microseconds in segment filename.
 		"+second_level_segment_duration"
-	// ffmpeg quits by sending q.
-	shutdown := func(stdin io.WriteCloser) error {
-		n, err := stdin.Write([]byte("q"))
-		if err != nil {
-			return errors.Wrap(err, fmt.Sprintf("%d", n))
-		}
-		return nil
-	}
-
 	run := func(quit chan struct{}) error {
 		link, err := info.getLink()
 		if err != nil {
@@ -174,13 +165,31 @@ func (s *Server) startRTSP(quit *nvr.Quiter, info rtspInfo) {
 			indexFName,
 		}
 
-		onStart := func(pid int) {
-			info.Pid = pid
-			info.Start = now
-			s.rtsp.Set(info)
-		}
-		outB, errB, err := nvr.RunProc(quit, onStart, duration, shutdown, program, arg...)
+		program := "ffmpeg"
+		// program, arg = "sleep", []string{9999}
+		cmd := exec.Command(program, arg...)
+		stdin, err := cmd.StdinPipe()
 		if err != nil {
+			return errors.Wrap(err, "")
+		}
+		outerrSize := 4 * 1024
+		cmd.Stdout = nvr.NewByteQueue(outerrSize)
+		cmd.Stderr = nvr.NewByteQueue(outerrSize)
+		if err := cmd.Start(); err != nil {
+			return errors.Wrap(err, "")
+		}
+		info.Pid = cmd.Process.Pid
+		info.Start = now
+		s.rtsp.Set(info)
+
+		// ffmpeg quits by sending q.
+		shutdown := func() error {
+			_, err := stdin.Write([]byte("q"))
+			return err
+		}
+
+		if err := nvr.RunProc(quit, duration, shutdown, cmd); err != nil {
+			outB, errB := cmd.Stdout.Slice(), cmd.Stderr.Slice()
 			return errors.Wrap(err, fmt.Sprintf("stdout: %s, stderr: %s", outB, errB))
 		}
 		return nil
