@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+</head>
+<body>
+<div id="info"></div>
+<video id="video" controls mute autoplay></video>
+
+<script>
+let page = {{.}};
+
+let video = document.querySelector("#video");
+if (Hls.isSupported()) {
+	let hls = new Hls();
+	hls.loadSource(page.Src);
+	hls.attachMedia(video);
+} else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+	video.src = page.Src;
+} else {
+	let info = document.querySelector("#info");
+	info.textContent = "Your browser does not support HLS.";
+}
+</script>
+</body>
+</html>

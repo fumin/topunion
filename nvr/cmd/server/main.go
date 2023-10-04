@@ -1,19 +1,24 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
+	"net/url"
 	"nvr"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
-	"text/template"
 	"time"
 
 	"github.com/pkg/errors"
@@ -22,6 +27,62 @@ import (
 var (
 	serverDir = flag.String("d", "server", "server directory")
 )
+
+const (
+	PathHLSIndex = "/HLSIndex"
+	PathVideo    = "/Video"
+	PathServe    = "/Serve"
+)
+
+func HLSIndex(s *Server, w http.ResponseWriter, r *http.Request) {
+	fpath := r.FormValue("f")
+
+	dir := filepath.Dir(fpath)
+
+	f, err := os.Open(fpath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+	out := bytes.NewBuffer(nil)
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		var outLine string
+		switch {
+		case strings.HasPrefix(line, "#"):
+			outLine = line
+		default:
+			outLine = s.serveURL(filepath.Join(dir, line))
+		}
+		out.WriteString(outLine + "\n")
+	}
+	if err := scanner.Err(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Write(out.Bytes())
+}
+
+//go:embed video.html
+var videoHTML string
+var videoTmpl = template.Must(template.New("").Parse(videoHTML))
+
+func Video(s *Server, w http.ResponseWriter, r *http.Request) {
+	src := r.FormValue("s")
+	page := struct {
+		Src string
+	}{}
+	page.Src = src
+	videoTmpl.Execute(w, page)
+}
+
+func Serve(s *Server, w http.ResponseWriter, r *http.Request) {
+	fpath := r.FormValue("f")
+	http.ServeFile(w, r, fpath)
+}
 
 func Quit(s *Server, w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -36,15 +97,63 @@ var indexHTML string
 var indexTmpl = template.Must(template.New("").Parse(indexHTML))
 
 func Index(s *Server, w http.ResponseWriter, r *http.Request) {
+	rtsps := s.rtsp.All()
+	now := time.Now().In(time.UTC)
+	for i, info := range rtsps {
+		v := url.Values{}
+		v.Set("s", s.hlsIndex(s.videoIndex(info.Name, now)))
+		rtsps[i].Live = PathVideo + "?" + v.Encode()
+	}
+	sort.Slice(rtsps, func(i, j int) bool { return rtsps[i].Name < rtsps[j].Name })
+
 	page := struct {
 		RTSP []rtspInfo
 	}{}
-	page.RTSP = s.rtsp.All()
-	sort.Slice(page.RTSP, func(i, j int) bool { return page.RTSP[i].Name < page.RTSP[j].Name })
+	page.RTSP = rtsps
 	indexTmpl.Execute(w, page)
 }
 
+type arpHW struct {
+	ip string
+	hw string
+}
+
+func arpScan(networkInterface string) (map[string]arpHW, error) {
+	program := "arp-scan"
+	arg := []string{
+		"--interface=" + networkInterface,
+		"-l",
+		// Concise output to aid parsing.
+		"-x",
+	}
+	cmd := exec.Command(program, arg...)
+	b, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, errors.Wrap(err, "")
+	}
+
+	hws := make(map[string]arpHW)
+	scanner := bufio.NewScanner(bytes.NewBuffer(b))
+	for scanner.Scan() {
+		line := scanner.Text()
+		cols := strings.Split(line, "\n")
+		if len(cols) < 2 {
+			return nil, errors.Wrap(err, fmt.Sprintf("%#v %s", cols, b))
+		}
+
+		var hw arpHW
+		hw.ip = cols[0]
+		hw.hw = cols[1]
+		hws[hw.hw] = hw
+	}
+	if scanner.Err(); err != nil {
+		return nil, errors.Wrap(err, "")
+	}
+	return hws, nil
+}
+
 type rtspInfo struct {
+	// Fields related to the source stream.
 	Name             string
 	Link             string
 	NetworkInterface string
@@ -54,14 +163,29 @@ type rtspInfo struct {
 	Port             int
 	Path             string
 
+	// Fields related to background recording process.
 	Pid   int
 	Start time.Time
+
+	// Fields related to UI.
+	Live string
 }
 
 func (info rtspInfo) getLink() (string, error) {
 	if info.Link != "" {
 		return info.Link, nil
 	}
+
+	hws, err := arpScan(info.NetworkInterface)
+	if err != nil {
+		return "", errors.Wrap(err, "")
+	}
+	hw, ok := hws[info.MacAddress]
+	if !ok {
+		return "", errors.Errorf("%#v %#v", info, hws)
+	}
+	info.Link = fmt.Sprintf("rtsp://%s:%s@%s:%d%s", info.Username, info.Password, hw.ip, info.Port, info.Path)
+
 	return info.Link, nil
 }
 
@@ -99,7 +223,7 @@ type Server struct {
 	ScriptDir string
 	Scripts   nvr.Scripts
 
-	RTSPDir string
+	VideoDir string
 
 	rtsp *rtspMap
 }
@@ -117,19 +241,50 @@ func NewServer(dir, addr string) (*Server, error) {
 		return nil, errors.Wrap(err, "")
 	}
 
-	s.RTSPDir = filepath.Join(dir, "rtsp")
+	s.VideoDir = filepath.Join(dir, "video")
 
 	s.rtsp = newRTSPMap()
 
+	handleFunc(s, PathHLSIndex, HLSIndex)
+	handleFunc(s, PathVideo, Video)
+	handleFunc(s, PathServe, Serve)
 	handleFunc(s, "/Quit", Quit)
 	handleFunc(s, "/", Index)
 
 	return s, nil
 }
 
-func (s *Server) startRTSP(quit *nvr.Quiter, info rtspInfo) {
-	// ffmpeg -i "rtsp://localhost:8554/rtsp" -an -hls_time 10 -hls_list_size 0 -strftime 1 -hls_flags append_list+second_level_segment_duration -hls_segment_filename "ffmpeg/%Y%m%d_%H%M%S_%%06t.ts" "ffmpeg/out.m3u8"
+func (s *Server) serveURL(fpath string) string {
+	v := url.Values{}
+	v.Set("f", fpath)
+	return PathServe + "?" + v.Encode()
+}
 
+func (s *Server) hlsIndex(fpath string) string {
+	v := url.Values{}
+	v.Set("f", fpath)
+	return PathHLSIndex + "?" + v.Encode()
+}
+
+func (s *Server) videoIndex(name string, t time.Time) string {
+	dayDir := filepath.Join(s.VideoDir, name, t.Format("20060102"))
+	indexFName := filepath.Join(dayDir, "index.m3u8")
+	return indexFName
+}
+
+func (s *Server) startRTSP(quit *nvr.Quiter, info rtspInfo) {
+	getInput := func() (string, error) {
+		return info.getLink()
+	}
+	onStart := func(pid int, t time.Time) {
+		info.Pid = pid
+		info.Start = t
+		s.rtsp.Set(info)
+	}
+	s.recordVideo(quit, info.Name, getInput, onStart)
+}
+
+func (s *Server) recordVideo(quit *nvr.Quiter, name string, getInput func() (string, error), onStart func(int, time.Time)) {
 	const program = "ffmpeg"
 	const hlsFlags = "" +
 		// Append to the same HLS index file.
@@ -137,7 +292,7 @@ func (s *Server) startRTSP(quit *nvr.Quiter, info rtspInfo) {
 		// Use microseconds in segment filename.
 		"+second_level_segment_duration"
 	run := func(quit chan struct{}) error {
-		link, err := info.getLink()
+		input, err := getInput()
 		if err != nil {
 			return errors.Wrap(err, "")
 		}
@@ -147,11 +302,14 @@ func (s *Server) startRTSP(quit *nvr.Quiter, info rtspInfo) {
 		endT = endT.AddDate(0, 0, 1)
 		duration := endT.Sub(now)
 
-		dayDir := filepath.Join(s.RTSPDir, now.Format("20060102"))
+		dayDir := filepath.Join(s.VideoDir, name, now.Format("20060102"))
+		if err := os.MkdirAll(dayDir, os.ModePerm); err != nil {
+			return errors.Wrap(err, "")
+		}
 		segmentFName := filepath.Join(dayDir, "%s_%%06t.ts")
 		indexFName := filepath.Join(dayDir, "index.m3u8")
 		arg := []string{
-			"-i", link,
+			"-i", input,
 			// No audio.
 			"-an",
 			// 10 seconds per segment.
@@ -164,23 +322,24 @@ func (s *Server) startRTSP(quit *nvr.Quiter, info rtspInfo) {
 			"-hls_segment_filename", segmentFName,
 			indexFName,
 		}
+		// If input is a local file, loop it forever.
+		if _, err := os.Stat(input); err == nil {
+			arg = append([]string{"-stream_loop", "-1"}, arg...)
+		}
 
 		program := "ffmpeg"
-		// program, arg = "sleep", []string{9999}
 		cmd := exec.Command(program, arg...)
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			return errors.Wrap(err, "")
 		}
-		outerrSize := 4 * 1024
+		outerrSize := 1024 * 1024
 		cmd.Stdout = nvr.NewByteQueue(outerrSize)
 		cmd.Stderr = nvr.NewByteQueue(outerrSize)
 		if err := cmd.Start(); err != nil {
 			return errors.Wrap(err, "")
 		}
-		info.Pid = cmd.Process.Pid
-		info.Start = now
-		s.rtsp.Set(info)
+		onStart(cmd.Process.Pid, now)
 
 		// ffmpeg quits by sending q.
 		shutdown := func() error {
@@ -189,7 +348,8 @@ func (s *Server) startRTSP(quit *nvr.Quiter, info rtspInfo) {
 		}
 
 		if err := nvr.RunProc(quit, duration, shutdown, cmd); err != nil {
-			outB, errB := cmd.Stdout.Slice(), cmd.Stderr.Slice()
+			outB := cmd.Stdout.(*nvr.ByteQueue).Slice()
+			errB := cmd.Stderr.(*nvr.ByteQueue).Slice()
 			return errors.Wrap(err, fmt.Sprintf("stdout: %s, stderr: %s", outB, errB))
 		}
 		return nil
@@ -243,10 +403,17 @@ func mainWithErr() error {
 		return errors.Wrap(err, "")
 	}
 
-	vlc := rtspInfo{
-		Name: "vlc",
-		Link: "rtsp://localhost:8554/rtsp",
+	rtsp0 := rtspInfo{
+		Name:             "rtsp",
+		NetworkInterface: "",
+		MacAddress:       "",
+		Username:         "admin",
+		Password:         "0000",
+		Port:             8080,
+		Path:             "/h264_ulaw.sdp",
 	}
+	// rtsp0.Link = "rtsp://localhost:8554/rtsp"
+	// rtsp0.Link = "sample/shilin.mp4"
 	vlcRTSPQuiter := nvr.NewQuiter()
 	server.startRTSP(vlcRTSPQuiter, vlc)
 

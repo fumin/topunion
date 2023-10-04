@@ -2,6 +2,7 @@
 misc
 data*
 output*
+.DS_Store
 *.pth
 *.pt
 *.jit

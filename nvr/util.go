@@ -2,7 +2,6 @@ package nvr
 
 import (
 	"fmt"
-	"io"
 	"log"
 	"os/exec"
 	"time"
@@ -12,11 +11,12 @@ import (
 )
 
 type ByteQueue struct {
-	q *deque.Deque[byte]
+	size int
+	q    *deque.Deque[byte]
 }
 
 func NewByteQueue(size int) *ByteQueue {
-	q := &ByteQueue{}
+	q := &ByteQueue{size: size}
 	q.q = deque.Make[byte](size)
 	return q
 }
@@ -142,11 +142,11 @@ func RunProc(quit chan struct{}, duration time.Duration, shutdown func() error, 
 		xt.cleanup = errors.Errorf("unable to exit in %d seconds", exitWaitSecs)
 
 		// Force kill.
-		xt.kill = cmd.Process.Kill()
+		xt.kill = startedCmd.Process.Kill()
 	}()
 
 	var err runError
-	err.wait = cmd.Wait()
+	err.wait = startedCmd.Wait()
 	close(exited)
 
 	xt := <-exitC
