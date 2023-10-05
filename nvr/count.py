@@ -1,9 +1,10 @@
 # Example usage:
-# print "0.mp4\n1.mp4" | python count.py -o_track=track -i_width=1280 -i_height=720 -yolo_weights=yolo_best.pt -yolo_size=640
+# print "sample/egg.mp4,track.mp4" | python count.py -c='{"width"; 1280, "height": 720, "yolo": {"weights": "yolo_best.pt","size": 640}, "mask": {"enable": false}}'
 
 import argparse
 import datetime
 import inspect
+import json
 import logging
 import os
 import sys
@@ -103,12 +104,10 @@ def track(tracker, outputs, im):
 
 
 class Masker:
-    def __init__(self, config, dtype):
-        self.x1 = -1
-        if config["crop"]["x"] < 0:
+    def __init__(self, config, imgW, imgH, dtype):
+        if config["enable"] < 0:
             return
 
-        imgH, imgW = config["height"], config["width"]
         self.x1 = config["crop"]["x"]
         self.y1 = config["crop"]["y"]
         self.x2 = self.x1 + config["crop"]["w"]
@@ -253,16 +252,11 @@ def parseFNameTime(fname):
     return t
 
 
-def process(trackRoot, ipath, handler):
+def process(opath, ipath, handler):
     rMux = av.open(ipath)
     rStream = rMux.streams.video[0]
 
-    base = os.path.basename(ipath)
-    start = parseFNameTime(base)
-    trackDir = os.path.join(trackRoot, start.strftime("%Y%m%d"))
-    os.makedirs(trackDir, exist_ok=True)
-    trackFPath = os.path.join(trackDir, base)
-    trackMux = av.open(trackFPath, mode="w")
+    trackMux = av.open(opath, mode="w")
     trackStream = trackMux.add_stream("h264", rate=rStream.average_rate)
     trackStream.width = rStream.width
     trackStream.height = rStream.height
@@ -291,11 +285,7 @@ def main():
     lg.handlers[0].setFormatter(logging.Formatter("%(asctime)s.%(msecs)03d %(pathname)s:%(lineno)d %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("-o_track")
-    parser.add_argument("-i_width", type=int)
-    parser.add_argument("-i_height", type=int)
-    parser.add_argument("-yolo_weights")
-    parser.add_argument("-yolo_size", type=int)
+    parser.add_argument("-c")
     args = parser.parse_args()
 
     err = mainWithErr(args)
@@ -304,18 +294,21 @@ def main():
 
 
 def mainWithErr(args):
+    cfg = json.loads(args.c)
+
     numChannels = 3
-    masker = Masker({"width": args.i_width, "height": args.i_height, "numChannels": numChannels, "crop": {"x": -1}}, dtype=np.uint8)
-    img = torch.from_numpy(np.zeros([args.i_height, args.i_width, numChannels], dtype=np.uint8)).cuda()
+    masker = Masker(cfg["mask"], cfg["width"], cfg["height"], dtype=np.uint8)
+    img = torch.from_numpy(np.zeros([cfg["height"], cfg["width"], numChannels], dtype=np.uint8)).cuda()
     _, masked, _ = masker.run(img, [])
 
-    detector = newYolov8(args.yolo_weights, args.yolo_size, [[masked.shape[0], masked.shape[1]]])
+    detector = newYolov8(cfg["yolo"]["weights"], cfg["yolo"]["size"], [[masked.shape[0], masked.shape[1]]])
     tracker = newTracker()
     handler = Handler(masker, detector, tracker)
 
     for line in sys.stdin:
         line = line.rstrip()
-        process(args.o_track, line, handler)
+        opath, ipath = line.split(",")
+        process(opath, ipath, handler)
 
     return None
 

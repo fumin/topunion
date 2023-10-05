@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -307,6 +308,9 @@ func (s *Server) recordVideo(quit *nvr.Quiter, name string, getInput func() (str
 			return errors.Wrap(err, "")
 		}
 		segmentFName := filepath.Join(dayDir, "%s_%%06t.ts")
+		if runtime.GOOS == "windows" {
+			segmentFName = filepath.Join(dayDir, "%Y%m%d_%H%M%S_%%06t.ts")
+		}
 		indexFName := filepath.Join(dayDir, "index.m3u8")
 		arg := []string{
 			"-i", input,
@@ -404,7 +408,7 @@ func mainWithErr() error {
 	}
 
 	rtsp0 := rtspInfo{
-		Name:             "rtsp",
+		Name:             "rtsp0",
 		NetworkInterface: "",
 		MacAddress:       "",
 		Username:         "admin",
@@ -413,9 +417,9 @@ func mainWithErr() error {
 		Path:             "/h264_ulaw.sdp",
 	}
 	// rtsp0.Link = "rtsp://localhost:8554/rtsp"
-	// rtsp0.Link = "sample/shilin.mp4"
+	rtsp0.Link = "sample/egg.mp4"
 	vlcRTSPQuiter := nvr.NewQuiter()
-	server.startRTSP(vlcRTSPQuiter, vlc)
+	server.startRTSP(vlcRTSPQuiter, rtsp0)
 
 	log.Printf("listening at %s", server.Server.Addr)
 	if err := server.Server.ListenAndServe(); err != http.ErrServerClosed {
