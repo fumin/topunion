@@ -1,5 +1,5 @@
 # Example usage:
-# print "sample/egg.mp4,track.mp4" | python count.py -c='{"width"; 1280, "height": 720, "yolo": {"weights": "yolo_best.pt","size": 640}, "mask": {"enable": false}}'
+# printf '{"type": "process", "input": "sample/egg.mp4", "output": "track.mp4"}' | python count.py -c='{"input"; "sample/egg.mp4", "yolo": {"weights": "yolo_best.pt", "size": 640}, "mask": {"enable": false}, "warmup": ["sample/egg.mp4"]}'
 
 import argparse
 import datetime
@@ -104,7 +104,7 @@ def track(tracker, outputs, im):
 
 
 class Masker:
-    def __init__(self, config, imgW, imgH, dtype):
+    def __init__(self, config, imgH, imgW, dtype):
         if config["enable"] < 0:
             return
 
@@ -236,30 +236,23 @@ def newTracker():
     return t
 
 
-def parseFNameTime(fname):
-    if len(fname) < 19:
-        return None, f"{len(fname)} {inspect.getframeinfo(inspect.currentframe())}"
-
-    year = int(fname[:4])
-    month = int(fname[4:6])
-    day = int(fname[6:8])
-    hour = int(fname[9:11])
-    minute = int(fname[11:13])
-    second = int(fname[13:15])
-    milliSec = int(fname[16:19])
-
-    t = datetime.datetime.utcnow().replace(year=year, month=month, day=day, hour=hour, minute=minute, second=second, microsecond=milliSec*1000, tzinfo=datetime.timezone.utc)
-    return t
+def getImgSize(ipath):
+    mux = av.open(ipath)
+    stream = mux.streams.video[0]
+    w, h = stream.width, stream.height
+    mux.close()
+    return w, h
 
 
-def process(opath, ipath, handler):
-    rMux = av.open(ipath)
+def process(dstTrack, src, handler):
+    rMux = av.open(src)
     rStream = rMux.streams.video[0]
 
-    trackMux = av.open(opath, mode="w")
-    trackStream = trackMux.add_stream("h264", rate=rStream.average_rate)
-    trackStream.width = rStream.width
-    trackStream.height = rStream.height
+    if dstTrack != "":
+        trackMux = av.open(dstTrack, mode="w")
+        trackStream = trackMux.add_stream("h264", rate=rStream.average_rate)
+        trackStream.width = rStream.width
+        trackStream.height = rStream.height
 
     for frame in rMux.decode(rStream):
         ts = [{"t": time.perf_counter()}]
@@ -267,13 +260,15 @@ def process(opath, ipath, handler):
         img = frame.to_rgb().to_ndarray()
         out = handler.h(img, ts)
 
-        trackF = av.VideoFrame.from_ndarray(out.track, format="rgb24")
-        for packet in trackStream.encode(trackF):
-            trackMux.mux(packet)
+        if dstTrack != "":
+            trackF = av.VideoFrame.from_ndarray(out.track, format="rgb24")
+            for packet in trackStream.encode(trackF):
+                trackMux.mux(packet)
 
-    for packet in trackStream.encode():
-        trackMux.mux(packet)
-    trackMux.close()
+    if dstTrack != "":
+        for packet in trackStream.encode():
+            trackMux.mux(packet)
+        trackMux.close()
 
     rMux.close()
 
@@ -294,21 +289,34 @@ def main():
 
 
 def mainWithErr(args):
+    logging.info("%s", args.c)
     cfg = json.loads(args.c)
 
+    width, height = getImgSize(cfg["input"])
+    dtype = np.uint8
+    masker = Masker(cfg["mask"], height, width, dtype=dtype)
     numChannels = 3
-    masker = Masker(cfg["mask"], cfg["width"], cfg["height"], dtype=np.uint8)
-    img = torch.from_numpy(np.zeros([cfg["height"], cfg["width"], numChannels], dtype=np.uint8)).cuda()
+    img = torch.from_numpy(np.zeros([height, width, numChannels], dtype=dtype)).cuda()
     _, masked, _ = masker.run(img, [])
 
     detector = newYolov8(cfg["yolo"]["weights"], cfg["yolo"]["size"], [[masked.shape[0], masked.shape[1]]])
     tracker = newTracker()
     handler = Handler(masker, detector, tracker)
 
+    # Warmup the tracker.
+    for wuInput in cfg["warmup"]:
+        process("", wuInput, handler)
+
     for line in sys.stdin:
         line = line.rstrip()
-        opath, ipath = line.split(",")
-        process(opath, ipath, handler)
+        op = json.loads(line)
+        opType = op["type"]
+        if opType == "quit":
+            break
+        elif opType == "process":
+            process(op["dstTrack"], op["src"], handler)
+        else:
+            logging.info("unknown operation %s", op)
 
     return None
 

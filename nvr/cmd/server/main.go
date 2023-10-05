@@ -16,7 +16,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -274,6 +273,7 @@ func (s *Server) videoIndex(name string, t time.Time) string {
 }
 
 func (s *Server) startRTSP(quit *nvr.Quiter, info rtspInfo) {
+	dir := filepath.Join(s.VideoDir, info.Name)
 	getInput := func() (string, error) {
 		return info.getLink()
 	}
@@ -282,83 +282,7 @@ func (s *Server) startRTSP(quit *nvr.Quiter, info rtspInfo) {
 		info.Start = t
 		s.rtsp.Set(info)
 	}
-	s.recordVideo(quit, info.Name, getInput, onStart)
-}
-
-func (s *Server) recordVideo(quit *nvr.Quiter, name string, getInput func() (string, error), onStart func(int, time.Time)) {
-	const program = "ffmpeg"
-	const hlsFlags = "" +
-		// Append to the same HLS index file.
-		"append_list" +
-		// Use microseconds in segment filename.
-		"+second_level_segment_duration"
-	run := func(quit chan struct{}) error {
-		input, err := getInput()
-		if err != nil {
-			return errors.Wrap(err, "")
-		}
-
-		now := time.Now().In(time.UTC)
-		endT := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-		endT = endT.AddDate(0, 0, 1)
-		duration := endT.Sub(now)
-
-		dayDir := filepath.Join(s.VideoDir, name, now.Format("20060102"))
-		if err := os.MkdirAll(dayDir, os.ModePerm); err != nil {
-			return errors.Wrap(err, "")
-		}
-		segmentFName := filepath.Join(dayDir, "%s_%%06t.ts")
-		if runtime.GOOS == "windows" {
-			segmentFName = filepath.Join(dayDir, "%Y%m%d_%H%M%S_%%06t.ts")
-		}
-		indexFName := filepath.Join(dayDir, "index.m3u8")
-		arg := []string{
-			"-i", input,
-			// No audio.
-			"-an",
-			// 10 seconds per segment.
-			"-hls_time", "10",
-			// No limit on number of segments.
-			"-hls_list_size", "0",
-			// Use strftime syntax for segment filenames.
-			"-strftime", "1",
-			"-hls_flags", hlsFlags,
-			"-hls_segment_filename", segmentFName,
-			indexFName,
-		}
-		// If input is a local file, loop it forever.
-		if _, err := os.Stat(input); err == nil {
-			arg = append([]string{"-stream_loop", "-1"}, arg...)
-		}
-
-		program := "ffmpeg"
-		cmd := exec.Command(program, arg...)
-		stdin, err := cmd.StdinPipe()
-		if err != nil {
-			return errors.Wrap(err, "")
-		}
-		outerrSize := 1024 * 1024
-		cmd.Stdout = nvr.NewByteQueue(outerrSize)
-		cmd.Stderr = nvr.NewByteQueue(outerrSize)
-		if err := cmd.Start(); err != nil {
-			return errors.Wrap(err, "")
-		}
-		onStart(cmd.Process.Pid, now)
-
-		// ffmpeg quits by sending q.
-		shutdown := func() error {
-			_, err := stdin.Write([]byte("q"))
-			return err
-		}
-
-		if err := nvr.RunProc(quit, duration, shutdown, cmd); err != nil {
-			outB := cmd.Stdout.(*nvr.ByteQueue).Slice()
-			errB := cmd.Stderr.(*nvr.ByteQueue).Slice()
-			return errors.Wrap(err, fmt.Sprintf("stdout: %s, stderr: %s", outB, errB))
-		}
-		return nil
-	}
-	quit.Loop(run)
+	nvr.RecordVideo(quit, dir, getInput, onStart)
 }
 
 func handleFunc(s *Server, httpPath string, fn func(*Server, http.ResponseWriter, *http.Request)) {
