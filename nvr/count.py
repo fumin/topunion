@@ -1,5 +1,5 @@
 # Example usage:
-# printf '{"type": "process", "input": "sample/egg.mp4", "output": "track.mp4"}' | python count.py -c='{"input"; "sample/egg.mp4", "yolo": {"weights": "yolo_best.pt", "size": 640}, "mask": {"enable": false}, "warmup": ["sample/egg.mp4"]}'
+# printf '{"type": "process", "dstTrack": "track.mp4", "src": "sample/short.mp4"}\n{"type": "quit"}' | python count.py -c='{"input": "sample/short.mp4", "device": "cpu", "mask": {"enable": false}, "yolo": {"weights": "yolo_best.pt", "size": 640}, "track": {"prevCounted": 10000}, "warmup": ["sample/short.mp4"]}'
 
 import argparse
 import datetime
@@ -16,13 +16,15 @@ import torchvision
 import cv2
 import av
 
-from detectron2.structures import Boxes, Instances
-
-import ultralytics
-
-# BYTETracker needs this numpy fix...
-np.float = float
-from yolox.tracker.byte_tracker import BYTETracker
+HAS_AI = False
+if HAS_AI:
+    from detectron2.structures import Boxes, Instances
+    
+    import ultralytics
+    
+    # BYTETracker needs this numpy fix...
+    np.float = float
+    from yolox.tracker.byte_tracker import BYTETracker
 
 
 class Handler:
@@ -31,18 +33,21 @@ class Handler:
         self.predictor = predictor
         self.tracker = tracker
 
-    def h(self, frame, ts):
-        img = torch.from_numpy(frame).cuda()
+    def h(self, img, ts):
         cropped, masked1, maskedViz = self.masker.run(img, ts)
         masked = [masked1]
 
-        outputs_batch = self.predictor.predict(self.predictor, masked, ts)
-        ts.append({"name": "predict", "t": time.perf_counter()})
+        numCounted = 0
+        trackPredImg = masked[0].cpu().numpy()
+        if HAS_AI:
+            outputs_batch = self.predictor.predict(self.predictor, masked, ts)
+            ts.append({"name": "predict", "t": time.perf_counter()})
 
-        trackPredImg = track(self.tracker, outputs_batch[0], maskedViz.cpu())
-        ts.append({"name": "track", "t": time.perf_counter()})
+            numCounted, trackPredImg = track(self.tracker, outputs_batch[0], maskedViz.cpu())
+            ts.append({"name": "track", "t": time.perf_counter()})
 
         res = argparse.Namespace()
+        res.numCounted = numCounted
         res.track = trackPredImg
         return res
 
@@ -99,13 +104,16 @@ def track(tracker, outputs, im):
     for tid in trackIDs:
         tracker.ids[tid] = True
 
-    trackPredImg = plot(im, trackBoxes, trackIDs, trackScores, f"egg: {len(tracker.ids)}")
-    return trackPredImg
+    numCounted = len(tracker.ids) - tracker.warmup
+    numCounted += tracker.prevCounted
+    trackPredImg = plot(im, trackBoxes, trackIDs, trackScores, f"egg: {numCounted}")
+    return numCounted, trackPredImg
 
 
 class Masker:
-    def __init__(self, config, imgH, imgW, dtype):
-        if config["enable"] < 0:
+    def __init__(self, config, imgH, imgW, dtype, device):
+        self.config = config
+        if not config["enable"]:
             return
 
         self.x1 = config["crop"]["x"]
@@ -125,12 +133,12 @@ class Masker:
             yS = config["mask"]["y"] + int(x*slope)
             yE = yS + config["mask"]["h"]
             mask[yS:yE, x] = 1
-        self.mask = torch.from_numpy(mask).cuda()
+        self.mask = torch.from_numpy(mask).to(device)
 
         self.vizMask = torch.clip(self.mask.float() + 0.25, 0, 1)
 
     def run(self, img, ts):
-        if self.x1 < 0:
+        if not self.config["enable"]:
             return img, img, img
 
         cropped = img[self.y1:self.y2, self.x1:self.x2]
@@ -216,7 +224,7 @@ def newYolov8(weights, yoloSize, shapes):
     return myPredictor
 
 
-def newTracker():
+def newTracker(config):
     trackerArg = argparse.Namespace()
 
     # Only detections over track_thresh will be considered.
@@ -233,6 +241,8 @@ def newTracker():
     t = argparse.Namespace()
     t.t = tracker
     t.ids = {}
+    t.warmup = 0
+    t.prevCounted = config["prevCounted"]
     return t
 
 
@@ -244,7 +254,7 @@ def getImgSize(ipath):
     return w, h
 
 
-def process(dstTrack, src, handler):
+def process(dstTrack, src, handler, device):
     rMux = av.open(src)
     rStream = rMux.streams.video[0]
 
@@ -258,6 +268,7 @@ def process(dstTrack, src, handler):
         ts = [{"t": time.perf_counter()}]
 
         img = frame.to_rgb().to_ndarray()
+        img = torch.from_numpy(img).to(device)
         out = handler.h(img, ts)
 
         if dstTrack != "":
@@ -294,18 +305,24 @@ def mainWithErr(args):
 
     width, height = getImgSize(cfg["input"])
     dtype = np.uint8
-    masker = Masker(cfg["mask"], height, width, dtype=dtype)
+    device = cfg["device"]
+    masker = Masker(cfg["mask"], height, width, dtype, device)
     numChannels = 3
-    img = torch.from_numpy(np.zeros([height, width, numChannels], dtype=dtype)).cuda()
+    img = torch.from_numpy(np.zeros([height, width, numChannels], dtype=dtype)).to(device)
     _, masked, _ = masker.run(img, [])
 
-    detector = newYolov8(cfg["yolo"]["weights"], cfg["yolo"]["size"], [[masked.shape[0], masked.shape[1]]])
-    tracker = newTracker()
+    detector = None
+    tracker = None
+    if HAS_AI:
+        detector = newYolov8(cfg["yolo"]["weights"], cfg["yolo"]["size"], [[masked.shape[0], masked.shape[1]]])
+        tracker = newTracker(cfg["track"])
     handler = Handler(masker, detector, tracker)
 
-    # Warmup the tracker.
+    # Warmup the tracker, so that it does not count objects in the first frame as new objects.
     for wuInput in cfg["warmup"]:
-        process("", wuInput, handler)
+        process("", wuInput, handler, device)
+    if HAS_AI:
+        tracker.warmup = len(tracker.ids)
 
     for line in sys.stdin:
         line = line.rstrip()
@@ -314,7 +331,7 @@ def mainWithErr(args):
         if opType == "quit":
             break
         elif opType == "process":
-            process(op["dstTrack"], op["src"], handler)
+            process(op["dstTrack"], op["src"], handler, device)
         else:
             logging.info("unknown operation %s", op)
 

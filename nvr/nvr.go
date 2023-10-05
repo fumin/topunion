@@ -56,16 +56,13 @@ func (c *counter) write(p []byte) (int, error) {
 	return n, err
 }
 
-func (c *counter) process(dstTrack, src string) error {
-	op := struct {
-		Type     string `json:"type"`
-		DstTrack string `json:"dstTrack"`
-		Src      string `json:"src"`
-	}{
-		Type:     "process",
-		DstTrack: dstTrack,
-		Src:      src,
-	}
+type processOp struct {
+	Type     string `json:"type"`
+	DstTrack string `json:"dstTrack"`
+	Src      string `json:"src"`
+}
+
+func (c *counter) process(op processOp) error {
 	b, err := json.Marshal(op)
 	if err != nil {
 		return errors.Wrap(err, "")
@@ -74,20 +71,12 @@ func (c *counter) process(dstTrack, src string) error {
 	if _, err := c.write(append(b, '\n')); err != nil {
 		return errors.Wrap(err, "")
 	}
-
 	return nil
 }
 
 func Count(quit *Quiter, dst, src string, onStart func(int, time.Time)) {
 	cnter := &counter{}
-	go func() {
-		for {
-			dst, src := getUnprocessed()
-			cnter.process(dst, src)
-		}
-	}()
-
-	run := func(quit chan struct{}) error {
+	runCount := func(quit chan struct{}) error {
 		program := "python"
 		cmd := exec.Command(program, arg...)
 		stdin, err := cmd.StdinPipe()
@@ -101,24 +90,40 @@ func Count(quit *Quiter, dst, src string, onStart func(int, time.Time)) {
 			return errors.Wrap(err, "")
 		}
 		onStart(cmd.Process.Pid, now)
+		cnter.setStdin(stdin)
 
 		shutdown := func() error {
 			_, err := cnter.write([]byte(`{"type": "quit"}` + "\n"))
 			return err
 		}
 
-		duration := time.Now().Add(999 * 365 * 24 * time.Hour)
-		if err := RunProc(quit, duration, shutdown, cmd); err != nil {
+		runDuration := 999 * 365 * 24 * time.Hour
+		cleanupDuration := 3 * time.Seconds
+		if err := RunProc(quit, cmd, runDuration, shutdown, cleanupDuration); err != nil {
 			outB := cmd.Stdout.(*ByteQueue).Slice()
 			errB := cmd.Stderr.(*ByteQueue).Slice()
 			return errors.Wrap(err, fmt.Sprintf("stdout: %s, stderr: %s", outB, errB))
 		}
 		return nil
 	}
-	quit.Loop(run)
+	countC := make(chan error)
+	go func() {
+		countC <- quit.Loop(runCount)
+	}()
+
+	go func() {
+		for {
+			ops := getUnprocessed()
+			for _, op := range ops {
+				if err := cnter.process(op)
+			}
+		}
+	}()
+
+	countErr := <-countC
 }
 
-func RecordVideo(quit *Quiter, dir string, getInput func() (string, error), onStart func(int, time.Time)) {
+func RecordVideoFn(dir string, getInput func() (string, error), onStart func(int, time.Time)) quiterRunFn {
 	const program = "ffmpeg"
 	const hlsFlags = "" +
 		// Append to the same HLS index file.
@@ -134,7 +139,7 @@ func RecordVideo(quit *Quiter, dir string, getInput func() (string, error), onSt
 		now := time.Now().In(time.UTC)
 		endT := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 		endT = endT.AddDate(0, 0, 1)
-		duration := endT.Sub(now)
+		runDuration := endT.Sub(now)
 
 		dayDir := filepath.Join(dir, now.Format("20060102"))
 		if err := os.MkdirAll(dayDir, os.ModePerm); err != nil {
@@ -184,13 +189,15 @@ func RecordVideo(quit *Quiter, dir string, getInput func() (string, error), onSt
 			_, err := stdin.Write([]byte("q"))
 			return err
 		}
+		// ffmpeg cleans up itself pretty fast.
+		const cleanupDuration = 3 * time.Second
 
-		if err := RunProc(quit, duration, shutdown, cmd); err != nil {
+		if err := RunProc(quit, cmd, runDuration, shutdown, cleanupDuration); err != nil {
 			outB := cmd.Stdout.(*ByteQueue).Slice()
 			errB := cmd.Stderr.(*ByteQueue).Slice()
 			return errors.Wrap(err, fmt.Sprintf("stdout: %s, stderr: %s", outB, errB))
 		}
 		return nil
 	}
-	quit.Loop(run)
+	return run
 }

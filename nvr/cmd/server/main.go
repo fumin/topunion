@@ -272,7 +272,7 @@ func (s *Server) videoIndex(name string, t time.Time) string {
 	return indexFName
 }
 
-func (s *Server) startRTSP(quit *nvr.Quiter, info rtspInfo) {
+func (s *Server) startRTSP(info rtspInfo) *nvr.Quiter {
 	dir := filepath.Join(s.VideoDir, info.Name)
 	getInput := func() (string, error) {
 		return info.getLink()
@@ -282,7 +282,14 @@ func (s *Server) startRTSP(quit *nvr.Quiter, info rtspInfo) {
 		info.Start = t
 		s.rtsp.Set(info)
 	}
-	nvr.RecordVideo(quit, dir, getInput, onStart)
+	recordFn := nvr.RecordVideoFn(dir, getInput, onStart)
+
+	quit := nvr.NewQuiter()
+	go func(){
+		err := quit.Loop(recordFn)
+		quit.Send(err)
+	}()
+	return quit
 }
 
 func handleFunc(s *Server, httpPath string, fn func(*Server, http.ResponseWriter, *http.Request)) {
@@ -342,8 +349,7 @@ func mainWithErr() error {
 	}
 	// rtsp0.Link = "rtsp://localhost:8554/rtsp"
 	rtsp0.Link = "sample/egg.mp4"
-	vlcRTSPQuiter := nvr.NewQuiter()
-	server.startRTSP(vlcRTSPQuiter, rtsp0)
+	vlcRTSPQuiter := server.startRTSP(rtsp0)
 
 	log.Printf("listening at %s", server.Server.Addr)
 	if err := server.Server.ListenAndServe(); err != http.ErrServerClosed {

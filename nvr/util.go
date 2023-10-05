@@ -46,28 +46,31 @@ func NewQuiter() *Quiter {
 	return q
 }
 
-func (q *Quiter) Loop(fn func(chan struct{}) error) {
-	go func() {
-		lastLogT := time.Now().AddDate(-1, 0, 0)
-		for {
-			err := fn(q.req)
-			if err != nil {
-				// Only print errors intermitently to prevent constantly failing functions from overwhelming our logs.
-				now := time.Now()
-				if now.Sub(lastLogT) > time.Minute {
-					lastLogT = now
-					log.Printf("%+v", err)
-				}
-			}
+type quiterRunFn func(chan struct{}) error
 
-			select {
-			case <-q.req:
-				q.resp <- err
-				return
-			default:
+func (q *Quiter) Loop(fn quiterRunFn) error {
+	lastLogT := time.Now().AddDate(-1, 0, 0)
+	for {
+		err := fn(q.req)
+		if err != nil {
+			// Only print errors intermitently to prevent constantly failing functions from overwhelming our logs.
+			now := time.Now()
+			if now.Sub(lastLogT) > time.Minute {
+				lastLogT = now
+				log.Printf("%+v", err)
 			}
 		}
-	}()
+
+		select {
+		case <-q.req:
+			return err
+		default:
+		}
+	}
+}
+
+func (q *Quiter) Send(err error) {
+	q.resp <- err
 }
 
 func (q *Quiter) Quit() error {
@@ -118,7 +121,7 @@ func (err runError) orNil() error {
 	return nil
 }
 
-func RunProc(quit chan struct{}, duration time.Duration, shutdown func() error, startedCmd *exec.Cmd) error {
+func RunProc(quit chan struct{}, startedCmd *exec.Cmd, runDuration time.Duration, shutdown func() error, cleanupDuration time.Duration) error {
 	exited := make(chan struct{})
 	exitC := make(chan runError)
 	go func() {
@@ -129,18 +132,17 @@ func RunProc(quit chan struct{}, duration time.Duration, shutdown func() error, 
 		case <-exited:
 			return
 		case <-quit:
-		case <-time.After(duration):
+		case <-time.After(runDuration):
 		}
 		xt.shutdown = shutdown()
 
-		// Wait a while for the process to exit.
-		const exitWaitSecs = 3
+		// Wait a while for the process to cleanup.
 		select {
 		case <-exited:
 			return
-		case <-time.After(exitWaitSecs * time.Second):
+		case <-time.After(cleanupDuration):
 		}
-		xt.cleanup = errors.Errorf("unable to exit in %d seconds", exitWaitSecs)
+		xt.cleanup = errors.Errorf("unable to exit in %s", cleanupDuration)
 
 		// Force kill.
 		xt.kill = startedCmd.Process.Kill()
