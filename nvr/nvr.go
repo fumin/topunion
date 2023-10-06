@@ -1,15 +1,13 @@
 package nvr
 
 import (
+	"context"
 	_ "embed"
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sync"
 	"time"
 
 	"github.com/pkg/errors"
@@ -38,119 +36,74 @@ func NewScripts(dir string) (Scripts, error) {
 	return s, nil
 }
 
-type counter struct {
-	sync.Mutex
-	stdin io.ReadCloser
-}
+// func Count(quit *Quiter, dst, src string, onStart func(int, time.Time)) {
+// 	cnter := &counter{}
+// 	runCount := func(quit chan struct{}) error {
+// 		program := "python"
+// 		cmd := exec.Command(program, arg...)
+// 		stdin, err := cmd.StdinPipe()
+// 		if err != nil {
+// 			return errors.Wrap(err, "")
+// 		}
+// 		outerrSize := 1024 * 1024
+// 		cmd.Stdout = NewByteQueue(outerrSize)
+// 		cmd.Stderr = NewByteQueue(outerrSize)
+// 		if err := cmd.Start(); err != nil {
+// 			return errors.Wrap(err, "")
+// 		}
+// 		onStart(cmd.Process.Pid, now)
+// 		cnter.setStdin(stdin)
+//
+// 		shutdown := func() error {
+// 			_, err := cnter.write([]byte(`{"type": "quit"}` + "\n"))
+// 			return err
+// 		}
+//
+// 		runDuration := 99 * 365 * 24 * time.Hour
+// 		cleanupDuration := 3 * time.Seconds
+// 		if err := RunProc(quit, cmd, runDuration, shutdown, cleanupDuration); err != nil {
+// 			outB := cmd.Stdout.(*ByteQueue).Slice()
+// 			errB := cmd.Stderr.(*ByteQueue).Slice()
+// 			return errors.Wrap(err, fmt.Sprintf("stdout: %s, stderr: %s", outB, errB))
+// 		}
+// 		return nil
+// 	}
+// 	countC := make(chan error)
+// 	go func() {
+// 		countC <- quit.Loop(runCount)
+// 	}()
+//
+// 	go func() {
+// 		for {
+// 			ops := getUnprocessed()
+// 			for _, op := range ops {
+// 				if err := cnter.process(op)
+// 			}
+// 		}
+// 	}()
+//
+// 	countErr := <-countC
+// }
 
-func (c *counter) setStdin(stdin io.ReadCloser) {
-	c.Lock()
-	c.stdin = stdin
-	c.Unlock()
-}
-
-func (c *counter) write(p []byte) (int, error) {
-	c.Lock()
-	n, err := c.stdin.Write(p)
-	c.Unlock()
-	return n, err
-}
-
-type processOp struct {
-	Type     string `json:"type"`
-	DstTrack string `json:"dstTrack"`
-	Src      string `json:"src"`
-}
-
-func (c *counter) process(op processOp) error {
-	b, err := json.Marshal(op)
-	if err != nil {
-		return errors.Wrap(err, "")
-	}
-
-	if _, err := c.write(append(b, '\n')); err != nil {
-		return errors.Wrap(err, "")
-	}
-	return nil
-}
-
-func Count(quit *Quiter, dst, src string, onStart func(int, time.Time)) {
-	cnter := &counter{}
-	runCount := func(quit chan struct{}) error {
-		program := "python"
-		cmd := exec.Command(program, arg...)
-		stdin, err := cmd.StdinPipe()
-		if err != nil {
-			return errors.Wrap(err, "")
-		}
-		outerrSize := 1024 * 1024
-		cmd.Stdout = NewByteQueue(outerrSize)
-		cmd.Stderr = NewByteQueue(outerrSize)
-		if err := cmd.Start(); err != nil {
-			return errors.Wrap(err, "")
-		}
-		onStart(cmd.Process.Pid, now)
-		cnter.setStdin(stdin)
-
-		shutdown := func() error {
-			_, err := cnter.write([]byte(`{"type": "quit"}` + "\n"))
-			return err
-		}
-
-		runDuration := 999 * 365 * 24 * time.Hour
-		cleanupDuration := 3 * time.Seconds
-		if err := RunProc(quit, cmd, runDuration, shutdown, cleanupDuration); err != nil {
-			outB := cmd.Stdout.(*ByteQueue).Slice()
-			errB := cmd.Stderr.(*ByteQueue).Slice()
-			return errors.Wrap(err, fmt.Sprintf("stdout: %s, stderr: %s", outB, errB))
-		}
-		return nil
-	}
-	countC := make(chan error)
-	go func() {
-		countC <- quit.Loop(runCount)
-	}()
-
-	go func() {
-		for {
-			ops := getUnprocessed()
-			for _, op := range ops {
-				if err := cnter.process(op)
-			}
-		}
-	}()
-
-	countErr := <-countC
-}
-
-func RecordVideoFn(dir string, getInput func() (string, error), onStart func(int, time.Time)) quiterRunFn {
+func RecordVideoFn(dir string, getInput func() (string, error), onStart func(int)) quiterRunFn {
 	const program = "ffmpeg"
 	const hlsFlags = "" +
 		// Append to the same HLS index file.
 		"append_list" +
 		// Use microseconds in segment filename.
 		"+second_level_segment_duration"
-	run := func(quit chan struct{}) error {
+	run := func(ctx context.Context) error {
 		input, err := getInput()
 		if err != nil {
 			return errors.Wrap(err, "")
 		}
 
-		now := time.Now().In(time.UTC)
-		endT := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-		endT = endT.AddDate(0, 0, 1)
-		runDuration := endT.Sub(now)
-
-		dayDir := filepath.Join(dir, now.Format("20060102"))
-		if err := os.MkdirAll(dayDir, os.ModePerm); err != nil {
-			return errors.Wrap(err, "")
-		}
-		segmentFName := filepath.Join(dayDir, "%s_%%06t.ts")
+		segmentFName := filepath.Join(dir, "%s_%%06t.ts")
 		// strftime does not support "%s" in windows.
 		if runtime.GOOS == "windows" {
-			segmentFName = filepath.Join(dayDir, "%Y%m%d_%H%M%S_%%06t.ts")
+			segmentFName = filepath.Join(dir, "%Y%m%d_%H%M%S_%%06t.ts")
 		}
-		indexFName := filepath.Join(dayDir, "index.m3u8")
+		indexFName := filepath.Join(dir, "index.m3u8")
 		arg := []string{
 			"-i", input,
 			// No audio.
@@ -171,7 +124,7 @@ func RecordVideoFn(dir string, getInput func() (string, error), onStart func(int
 		}
 
 		program := "ffmpeg"
-		cmd := exec.Command(program, arg...)
+		cmd := exec.CommandContext(ctx, program, arg...)
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			return errors.Wrap(err, "")
@@ -179,20 +132,22 @@ func RecordVideoFn(dir string, getInput func() (string, error), onStart func(int
 		outerrSize := 1024 * 1024
 		cmd.Stdout = NewByteQueue(outerrSize)
 		cmd.Stderr = NewByteQueue(outerrSize)
-		if err := cmd.Start(); err != nil {
-			return errors.Wrap(err, "")
-		}
-		onStart(cmd.Process.Pid, now)
-
-		// ffmpeg quits by sending q.
-		shutdown := func() error {
+		cmd.Cancel = func() error {
 			_, err := stdin.Write([]byte("q"))
 			return err
 		}
-		// ffmpeg cleans up itself pretty fast.
-		const cleanupDuration = 3 * time.Second
+		cmd.WaitDelay = 10 * time.Second
 
-		if err := RunProc(quit, cmd, runDuration, shutdown, cleanupDuration); err != nil {
+		if err := cmd.Start(); err != nil {
+			return errors.Wrap(err, "")
+		}
+		onStart(cmd.Process.Pid)
+
+		err = cmd.Wait()
+		if err == context.Canceled {
+			return nil
+		}
+		if err != nil {
 			outB := cmd.Stdout.(*ByteQueue).Slice()
 			errB := cmd.Stderr.(*ByteQueue).Slice()
 			return errors.Wrap(err, fmt.Sprintf("stdout: %s, stderr: %s", outB, errB))

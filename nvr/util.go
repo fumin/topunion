@@ -1,9 +1,11 @@
 package nvr
 
 import (
+	"context"
 	"fmt"
 	"log"
-	"os/exec"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/carlmjohnson/deque"
@@ -34,24 +36,12 @@ func (q *ByteQueue) Slice() []byte {
 	return q.q.Slice()
 }
 
-type Quiter struct {
-	req  chan struct{}
-	resp chan error
-}
+type quiterRunFn func(context.Context) error
 
-func NewQuiter() *Quiter {
-	q := &Quiter{}
-	q.req = make(chan struct{})
-	q.resp = make(chan error)
-	return q
-}
-
-type quiterRunFn func(chan struct{}) error
-
-func (q *Quiter) Loop(fn quiterRunFn) error {
+func Loop(ctx context.Context, fn quiterRunFn) error {
 	lastLogT := time.Now().AddDate(-1, 0, 0)
 	for {
-		err := fn(q.req)
+		err := fn(ctx)
 		if err != nil {
 			// Only print errors intermitently to prevent constantly failing functions from overwhelming our logs.
 			now := time.Now()
@@ -62,100 +52,36 @@ func (q *Quiter) Loop(fn quiterRunFn) error {
 		}
 
 		select {
-		case <-q.req:
+		case <-ctx.Done():
 			return err
 		default:
 		}
 	}
 }
 
-func (q *Quiter) Send(err error) {
-	q.resp <- err
+const ymdhmsFormat = "20060102_150405"
+
+func TimeFormat(inT time.Time) string {
+	t := inT.In(time.UTC)
+	microSec := t.Nanosecond() / 1e3
+	return t.Format(ymdhmsFormat) + "_" + fmt.Sprintf("%06d", microSec)
 }
 
-func (q *Quiter) Quit() error {
-	close(q.req)
-	return <-q.resp
-}
-
-type runError struct {
-	wait     error
-	shutdown error
-	cleanup  error
-	kill     error
-}
-
-func (err runError) Error() string {
-	waitMsg := "<nil>"
-	if err.wait != nil {
-		waitMsg = err.wait.Error()
+func TimeParse(name string) (time.Time, error) {
+	ss := strings.Split(name, "_")
+	if len(ss) != 3 {
+		return time.Time{}, errors.Errorf("%d", len(ss))
 	}
-	shutdownMsg := "<nil>"
-	if err.shutdown != nil {
-		shutdownMsg = err.shutdown.Error()
+	t, err := time.Parse(ymdhmsFormat, ss[0]+"_"+ss[1])
+	if err != nil {
+		return time.Time{}, errors.Wrap(err, "")
 	}
-	cleanupMsg := "<nil>"
-	if err.cleanup != nil {
-		cleanupMsg = err.cleanup.Error()
+	microSec, err := strconv.Atoi(ss[2])
+	if err != nil {
+		return time.Time{}, errors.Wrap(err, "")
 	}
-	killMsg := "<nil>"
-	if err.kill != nil {
-		killMsg = err.kill.Error()
-	}
-	return fmt.Sprintf("wait: %s, shutdown: %s, cleanup: %s, kill: %s", waitMsg, shutdownMsg, cleanupMsg, killMsg)
-}
+	nanoSec := microSec * 1e3
 
-func (err runError) orNil() error {
-	if err.wait != nil {
-		return err
-	}
-	if err.shutdown != nil {
-		return err
-	}
-	if err.cleanup != nil {
-		return err
-	}
-	if err.kill != nil {
-		return err
-	}
-	return nil
-}
-
-func RunProc(quit chan struct{}, startedCmd *exec.Cmd, runDuration time.Duration, shutdown func() error, cleanupDuration time.Duration) error {
-	exited := make(chan struct{})
-	exitC := make(chan runError)
-	go func() {
-		var xt runError
-		defer func() { exitC <- xt }()
-
-		select {
-		case <-exited:
-			return
-		case <-quit:
-		case <-time.After(runDuration):
-		}
-		xt.shutdown = shutdown()
-
-		// Wait a while for the process to cleanup.
-		select {
-		case <-exited:
-			return
-		case <-time.After(cleanupDuration):
-		}
-		xt.cleanup = errors.Errorf("unable to exit in %s", cleanupDuration)
-
-		// Force kill.
-		xt.kill = startedCmd.Process.Kill()
-	}()
-
-	var err runError
-	err.wait = startedCmd.Wait()
-	close(exited)
-
-	xt := <-exitC
-	err.shutdown = xt.shutdown
-	err.cleanup = xt.cleanup
-	err.kill = xt.kill
-
-	return err.orNil()
+	parsed := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), nanoSec, t.Location())
+	return parsed, nil
 }

@@ -28,12 +28,27 @@ if HAS_AI:
 
 
 class Handler:
-    def __init__(self, masker, predictor, tracker):
+    def __init__(self, cfg, height, width):
+        dtype = np.uint8
+        masker = Masker(cfg["mask"], height, width, dtype, cfg["device"])
+        numChannels = 3
+        img = torch.from_numpy(np.zeros([height, width, numChannels], dtype=dtype)).to(cfg["device"])
+        _, masked, _ = masker.run(img, [])
+
+        detector = None
+        tracker = None
+        if HAS_AI:
+            detector = newYolov8(cfg["yolo"]["weights"], cfg["yolo"]["size"], [[masked.shape[0], masked.shape[1]]])
+            tracker = newTracker(cfg["track"])
+ 
+
+        self.config = cfg
         self.masker = masker
         self.predictor = predictor
         self.tracker = tracker
 
     def h(self, img, ts):
+        img = torch.from_numpy(img).to(self.config["device"])
         cropped, masked1, maskedViz = self.masker.run(img, ts)
         masked = [masked1]
 
@@ -246,15 +261,117 @@ def newTracker(config):
     return t
 
 
-def getImgSize(ipath):
+class Differ:
+    def __init__(self, dstIndexPath, srcIndexPath):
+        self.dstIndexPath = dstIndexPath
+        self.srcIndexPath = srcIndexPath
+
+        self.dstIndex = None
+
+    def newDstIndex(self):
+        dstIndex, err = parseIndex(self.dstIndexPath)
+        if err:
+            return err
+        srcIndex, err = parseIndex(self.srcIndexPath)
+        if err:
+            return err
+
+        # Find the index where dst is different from src.
+        diffIdx = -1
+        for i, dstLine in enumerate(dstIndex):
+            if i >= len(srcIndex):
+                diffIdx = i
+                break
+            srcLine = srcIndex[i]
+
+            if dstLine.b != srcLine.b:
+                diffIdx = i
+                break
+        if diffIdx == -1:
+            diffIdx = len(dstIndex)
+
+        self.dstIndex = dstIndex[:diffIdx]
+        return None
+
+    def getWarmup(self):
+        # Loop backwards and find the first previous segment.
+        urlIdx = -1
+        i = len(self.dstIndex)
+        while True:
+            i -= 1
+            if i < 0:
+                break
+            dstLine = self.dstIndex[i]
+
+            if dstLine.tag == "":
+                urlIdx = i
+                break
+            # Discontinuity means images from previous segments are separated from the current one.
+            # In this case, there's no warmup to be done.
+            if dstLine.tag == "EXT-X-DISCONTINUITY":
+                break
+
+        if urlIdx < 0:
+            return "", None
+        urlStr = self.dstIndex[urlIdx].b
+        return urlStr, None
+
+    def refresh(self):
+        srcIndex, err = parseIndex(self.srcIndexPath)
+        if err:
+            return None, err
+
+        # Check again that dst is the same as src, just to be on the safe side.
+        for i, dstLine in enumerate(self.dstIndex):
+            if i >= len(srcIndex):
+                return None, f"dst longer than src {i} {len(srcIndex)} {self.dstIndex} {srcIndex} {inspect.getframeinfo(inspect.currentframe())}"
+            srcLine = srcIndex[i]
+
+            if dstLine.b != srcLine.b:
+                return None, f"dst not equal to src {i} {dstLine} {srcLine} {self.dstIndex} {srcIndex} {inspect.getframeinfo(inspect.currentframe())}"
+
+        # Find the next unprocessed segment.
+        nextSegmentIdx = -1
+        i = len(self.dstIndex) - 1
+        while True:
+            i += 1
+            if i >= len(srcIndex):
+                break
+            srcLine = srcIndex[i]
+
+            newLines.append(srcLine)
+            if srcLine.tag == "":
+                nextSegmentIdx = i
+                break
+        if nextSegmentIdx == -1:
+            return [], None
+
+        newLines = srcIndex[len(self.dstIndex) : (nextSegmentIdx+1)]
+        return newLines, None
+
+    def save(self):
+
+
+def getImgSize(indexPath):
+    # Find an example video file.
+    dir = os.path.dirname(indexPath)
+    entries = os.listdir(dir)
+    ipath = ""
+    for entry in entries:
+        if entry.endswith(".ts"):
+            ipath = os.path.join(dir, entry)
+            break
+    if ipath == "":
+        return -1, -1, f"no videos in {dir} {inspect.getframeinfo(inspect.currentframe())}"
+
     mux = av.open(ipath)
     stream = mux.streams.video[0]
-    w, h = stream.width, stream.height
+    h, w = stream.height, stream.width
     mux.close()
-    return w, h
+    return h, w, None
 
 
-def process(dstTrack, src, handler, device):
+def handleVideo(dstTrack, src, handler):
     rMux = av.open(src)
     rStream = rMux.streams.video[0]
 
@@ -268,7 +385,6 @@ def process(dstTrack, src, handler, device):
         ts = [{"t": time.perf_counter()}]
 
         img = frame.to_rgb().to_ndarray()
-        img = torch.from_numpy(img).to(device)
         out = handler.h(img, ts)
 
         if dstTrack != "":
@@ -282,6 +398,23 @@ def process(dstTrack, src, handler, device):
         trackMux.close()
 
     rMux.close()
+
+
+def process(differ, newLines, handler):
+    if len(newLines) == 0:
+        return None
+    sgm = newLines[len(newLines)-1].b
+    srcPath = os.path.join(src, sgm)
+    dstPath = os.path.join(dst, sgm)
+    handleVideo(dstPath, srcPath, handler)
+
+    for l in newLines:
+        differ.dstIndex.append(l)
+    err = differ.save()
+    if err:
+        return err
+
+    return None
 
 
 def main():
@@ -303,37 +436,34 @@ def mainWithErr(args):
     logging.info("%s", args.c)
     cfg = json.loads(args.c)
 
-    width, height = getImgSize(cfg["input"])
-    dtype = np.uint8
-    device = cfg["device"]
-    masker = Masker(cfg["mask"], height, width, dtype, device)
-    numChannels = 3
-    img = torch.from_numpy(np.zeros([height, width, numChannels], dtype=dtype)).to(device)
-    _, masked, _ = masker.run(img, [])
+    dst = cfg["dst"]
+    src = cfg["src"]
+    differ = Differ(dst, src)
+    err = differ.newDiffIdx()
+    if err:
+        return err
+    height, width, err = getImgSize(src)
+    if err:
+        return err
 
-    detector = None
-    tracker = None
-    if HAS_AI:
-        detector = newYolov8(cfg["yolo"]["weights"], cfg["yolo"]["size"], [[masked.shape[0], masked.shape[1]]])
-        tracker = newTracker(cfg["track"])
-    handler = Handler(masker, detector, tracker)
+    handler = Handler(cfg, height, width)
 
     # Warmup the tracker, so that it does not count objects in the first frame as new objects.
-    for wuInput in cfg["warmup"]:
-        process("", wuInput, handler, device)
+    warmup, err = differ.getWarmup()
+    if err:
+        return err
+    if warmup != "":
+        handleVideo("", warmup, handler)
     if HAS_AI:
-        tracker.warmup = len(tracker.ids)
+        handler.tracker.warmup = len(tracker.ids)
 
-    for line in sys.stdin:
-        line = line.rstrip()
-        op = json.loads(line)
-        opType = op["type"]
-        if opType == "quit":
-            break
-        elif opType == "process":
-            process(op["dstTrack"], op["src"], handler, device)
-        else:
-            logging.info("unknown operation %s", op)
+    while True:
+        newLines, err = differ.refresh()
+        if err:
+            return err
+        err = process(differ, newLines, handler)
+        if err:
+            return err
 
     return None
 

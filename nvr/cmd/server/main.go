@@ -12,7 +12,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"nvr"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +21,8 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+
+	"nvr"
 )
 
 var (
@@ -100,8 +101,12 @@ func Index(s *Server, w http.ResponseWriter, r *http.Request) {
 	rtsps := s.rtsp.All()
 	now := time.Now().In(time.UTC)
 	for i, info := range rtsps {
+		indexPath, err := s.videoIndex(now, info.Name)
+		if err != nil {
+			continue
+		}
 		v := url.Values{}
-		v.Set("s", s.hlsIndex(s.videoIndex(info.Name, now)))
+		v.Set("s", s.hlsIndex(indexPath))
 		rtsps[i].Live = PathVideo + "?" + v.Encode()
 	}
 	sort.Slice(rtsps, func(i, j int) bool { return rtsps[i].Name < rtsps[j].Name })
@@ -223,7 +228,7 @@ type Server struct {
 	ScriptDir string
 	Scripts   nvr.Scripts
 
-	VideoDir string
+	RecordDir string
 
 	rtsp *rtspMap
 }
@@ -241,7 +246,7 @@ func NewServer(dir, addr string) (*Server, error) {
 		return nil, errors.Wrap(err, "")
 	}
 
-	s.VideoDir = filepath.Join(dir, "video")
+	s.RecordDir = filepath.Join(dir, "record")
 
 	s.rtsp = newRTSPMap()
 
@@ -266,30 +271,55 @@ func (s *Server) hlsIndex(fpath string) string {
 	return PathHLSIndex + "?" + v.Encode()
 }
 
-func (s *Server) videoIndex(name string, t time.Time) string {
-	dayDir := filepath.Join(s.VideoDir, name, t.Format("20060102"))
-	indexFName := filepath.Join(dayDir, "index.m3u8")
-	return indexFName
+func (s *Server) videoIndex(qt time.Time, name string) (string, error) {
+	t := qt.In(time.UTC)
+	dayDir := filepath.Join(s.RecordDir, t.Format("20060102"))
+	entries, err := os.ReadDir(dayDir)
+	if err != nil {
+		return "", errors.Wrap(err, "")
+	}
+
+	lastRecord := ""
+	for i := len(entries) - 1; i >= 0; i-- {
+		rec := entries[i].Name()
+		startT, err := nvr.TimeParse(rec)
+		if err != nil {
+			return "", errors.Wrap(err, fmt.Sprintf("\"%s\"", rec))
+		}
+		if startT.Before(t) {
+			lastRecord = rec
+			break
+		}
+	}
+	if lastRecord == "" {
+		return "", errors.Errorf("not found %s", dayDir)
+	}
+
+	indexFName := filepath.Join(dayDir, lastRecord, name, "index.m3u8")
+	return indexFName, nil
 }
 
-func (s *Server) startRTSP(info rtspInfo) *nvr.Quiter {
-	dir := filepath.Join(s.VideoDir, info.Name)
+func (s *Server) startRTSP(recordDir string, info rtspInfo) (context.CancelFunc, chan error, error) {
+	dir := filepath.Join(recordDir, info.Name)
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		return nil, nil, errors.Wrap(err, "")
+	}
 	getInput := func() (string, error) {
 		return info.getLink()
 	}
-	onStart := func(pid int, t time.Time) {
+	onStart := func(pid int) {
 		info.Pid = pid
-		info.Start = t
+		info.Start = time.Now()
 		s.rtsp.Set(info)
 	}
 	recordFn := nvr.RecordVideoFn(dir, getInput, onStart)
 
-	quit := nvr.NewQuiter()
-	go func(){
-		err := quit.Loop(recordFn)
-		quit.Send(err)
+	ctx, cancel := context.WithCancel(context.Background())
+	errC := make(chan error)
+	go func() {
+		errC <- nvr.Loop(ctx, recordFn)
 	}()
-	return quit
+	return cancel, errC, nil
 }
 
 func handleFunc(s *Server, httpPath string, fn func(*Server, http.ResponseWriter, *http.Request)) {
@@ -338,6 +368,12 @@ func mainWithErr() error {
 		return errors.Wrap(err, "")
 	}
 
+	now := time.Now().In(time.UTC)
+	dayStr := now.Format("20060102")
+	recordName := nvr.TimeFormat(now)
+	recordDir := filepath.Join(server.RecordDir, dayStr, recordName)
+	recordDir = `C:\Users\a3367\work\topunion\nvr\server\record\20231006\20231006_053001_096262`
+
 	rtsp0 := rtspInfo{
 		Name:             "rtsp0",
 		NetworkInterface: "",
@@ -349,14 +385,18 @@ func mainWithErr() error {
 	}
 	// rtsp0.Link = "rtsp://localhost:8554/rtsp"
 	rtsp0.Link = "sample/egg.mp4"
-	vlcRTSPQuiter := server.startRTSP(rtsp0)
+	cancelRTSP0, rtsp0ErrC, err := server.startRTSP(recordDir, rtsp0)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
 
 	log.Printf("listening at %s", server.Server.Addr)
 	if err := server.Server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Printf("%+v", err)
 	}
 
-	if err := vlcRTSPQuiter.Quit(); err != nil {
+	cancelRTSP0()
+	if err := <-rtsp0ErrC; err != nil {
 		log.Printf("%+v", err)
 	}
 
