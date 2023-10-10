@@ -1,5 +1,5 @@
 # Example usage:
-# printf '{"type": "process", "dstTrack": "track.mp4", "src": "sample/short.mp4"}\n{"type": "quit"}' | python count.py -c='{"input": "sample/short.mp4", "device": "cpu", "mask": {"enable": false}, "yolo": {"weights": "yolo_best.pt", "size": 640}, "track": {"prevCounted": 10000}, "warmup": ["sample/short.mp4"]}'
+# python count.py -c='{"TrackIndex": "server/record/20231010/20231010_060322_722691/rtsp0Track/index.m3u8", "Src": "server/record/20231010/20231010_060322_722691/rtsp0/index.m3u8", "Device": "cpu", "Mask": {"Enable": false}, "Yolo": {"Weights": "yolo_best.pt", "Size": 640}, "Track": {"PrevCount": 10000}}'
 
 import argparse
 import datetime
@@ -7,9 +7,11 @@ import inspect
 import json
 import logging
 import os
+import select
 import sys
 import time
 
+import inputimeout
 import numpy as np
 import torch
 import torchvision
@@ -27,35 +29,44 @@ if HAS_AI:
     from yolox.tracker.byte_tracker import BYTETracker
 
 
+def readline(secs):
+    rlist, _, _ = select.select([sys.stdin], [], [], secs)
+    if rlist:
+        line = sys.stdin.readline()
+    else:
+        line = ""
+    return line
+
+
 class Handler:
     def __init__(self, cfg, height, width):
         dtype = np.uint8
-        masker = Masker(cfg["mask"], height, width, dtype, cfg["device"])
+        masker = Masker(cfg["Mask"], height, width, dtype, cfg["Device"])
         numChannels = 3
-        img = torch.from_numpy(np.zeros([height, width, numChannels], dtype=dtype)).to(cfg["device"])
+        img = torch.from_numpy(np.zeros([height, width, numChannels], dtype=dtype)).to(cfg["Device"])
         _, masked, _ = masker.run(img, [])
 
         detector = None
         tracker = None
         if HAS_AI:
-            detector = newYolov8(cfg["yolo"]["weights"], cfg["yolo"]["size"], [[masked.shape[0], masked.shape[1]]])
-            tracker = newTracker(cfg["track"])
+            detector = newYolov8(cfg["Yolo"]["Weights"], cfg["Yolo"]["Size"], [[masked.shape[0], masked.shape[1]]])
+            tracker = newTracker(cfg["Track"])
  
 
         self.config = cfg
         self.masker = masker
-        self.predictor = predictor
+        self.detector = detector
         self.tracker = tracker
 
     def h(self, img, ts):
-        img = torch.from_numpy(img).to(self.config["device"])
+        img = torch.from_numpy(img).to(self.config["Device"])
         cropped, masked1, maskedViz = self.masker.run(img, ts)
         masked = [masked1]
 
         numCounted = 0
         trackPredImg = masked[0].cpu().numpy()
         if HAS_AI:
-            outputs_batch = self.predictor.predict(self.predictor, masked, ts)
+            outputs_batch = self.detector.predict(self.detector, masked, ts)
             ts.append({"name": "predict", "t": time.perf_counter()})
 
             numCounted, trackPredImg = track(self.tracker, outputs_batch[0], maskedViz.cpu())
@@ -120,7 +131,7 @@ def track(tracker, outputs, im):
         tracker.ids[tid] = True
 
     numCounted = len(tracker.ids) - tracker.warmup
-    numCounted += tracker.prevCounted
+    numCounted += tracker.prevCount
     trackPredImg = plot(im, trackBoxes, trackIDs, trackScores, f"egg: {numCounted}")
     return numCounted, trackPredImg
 
@@ -128,32 +139,32 @@ def track(tracker, outputs, im):
 class Masker:
     def __init__(self, config, imgH, imgW, dtype, device):
         self.config = config
-        if not config["enable"]:
+        if not config["Enable"]:
             return
 
-        self.x1 = config["crop"]["x"]
-        self.y1 = config["crop"]["y"]
-        self.x2 = self.x1 + config["crop"]["w"]
+        self.x1 = config["Crop"]["X"]
+        self.y1 = config["Crop"]["Y"]
+        self.x2 = self.x1 + config["Crop"]["W"]
         if self.x2 > imgW:
             self.x2 = imgW
-        self.y2 = self.y1 + config["crop"]["w"]
+        self.y2 = self.y1 + config["Crop"]["W"]
         if self.y2 > imgH:
             self.y2 = imgH
 
         croppedH, croppedW = self.y2-self.y1, self.x2 - self.x1
-        numChannels = config["numChannels"]
+        numChannels = 3
         mask = np.zeros([croppedH, croppedW, numChannels], dtype=dtype)
-        slope = config["mask"]["slope"] / croppedW
+        slope = config["Mask"]["Slope"] / croppedW
         for x in range(croppedW):
-            yS = config["mask"]["y"] + int(x*slope)
-            yE = yS + config["mask"]["h"]
+            yS = config["Mask"]["Y"] + int(x*slope)
+            yE = yS + config["Mask"]["H"]
             mask[yS:yE, x] = 1
         self.mask = torch.from_numpy(mask).to(device)
 
         self.vizMask = torch.clip(self.mask.float() + 0.25, 0, 1)
 
     def run(self, img, ts):
-        if not self.config["enable"]:
+        if not self.config["Enable"]:
             return img, img, img
 
         cropped = img[self.y1:self.y2, self.x1:self.x2]
@@ -257,99 +268,159 @@ def newTracker(config):
     t.t = tracker
     t.ids = {}
     t.warmup = 0
-    t.prevCounted = config["prevCounted"]
+    t.prevCount = config["PrevCount"]
     return t
 
 
+class M3U8Line:
+    def __init__(self):
+        self.b = ""
+        self.tag = ""
+    def __repr__(self):
+        return f"M3U8Line{{tag: {self.tag}, b: {self.b}}}"
+
+
+def newM3U8Line(line):
+    m = M3U8Line()
+    m.b = line
+    if not line.startswith("#"):
+        return m
+
+    # Remove preceding #
+    line = line[1:]
+    colonSS = line.split(":")
+    m.tag = colonSS[0]
+
+    return m
+
+
+def readIndex(fpath):
+    with open(fpath) as f:
+        b = f.read()
+    lines = b.split("\n")
+
+    # Remove empty line at the end
+    if len(lines) >= 1 and lines[len(lines)-1] == "":
+        lines = lines[:len(lines)-1]
+
+    m3u8s = []
+    for l in lines:
+        m = newM3U8Line(l)
+        m3u8s.append(m)
+
+    return m3u8s, None
+
+
 class Differ:
-    def __init__(self, dstIndexPath, srcIndexPath):
-        self.dstIndexPath = dstIndexPath
+    def __init__(self, trackIndexPath, srcIndexPath):
+        self.trackIndexPath = trackIndexPath
         self.srcIndexPath = srcIndexPath
 
-        self.dstIndex = None
+        self.trackIndex = None
 
-    def newDstIndex(self):
-        dstIndex, err = parseIndex(self.dstIndexPath)
-        if err:
-            return err
-        srcIndex, err = parseIndex(self.srcIndexPath)
-        if err:
-            return err
-
-        # Find the index where dst is different from src.
-        diffIdx = -1
-        for i, dstLine in enumerate(dstIndex):
-            if i >= len(srcIndex):
-                diffIdx = i
-                break
-            srcLine = srcIndex[i]
-
-            if dstLine.b != srcLine.b:
-                diffIdx = i
-                break
-        if diffIdx == -1:
-            diffIdx = len(dstIndex)
-
-        self.dstIndex = dstIndex[:diffIdx]
-        return None
+    def __repr__(self):
+        return f"Differ{{{self.trackIndexPath} {self.srcIndexPath} {self.trackIndex}}}"
 
     def getWarmup(self):
+        trackIndex, err = self._load()
+
         # Loop backwards and find the first previous segment.
         urlIdx = -1
-        i = len(self.dstIndex)
+        i = len(trackIndex)
         while True:
             i -= 1
             if i < 0:
                 break
-            dstLine = self.dstIndex[i]
+            trackLine = trackIndex[i]
 
-            if dstLine.tag == "":
+            if trackLine.tag == "":
                 urlIdx = i
                 break
-            # Discontinuity means images from previous segments are separated from the current one.
-            # In this case, there's no warmup to be done.
-            if dstLine.tag == "EXT-X-DISCONTINUITY":
+            # ENDLIST and DISCONTINUITY means images from previous segments are separated from the current one.
+            # In these cases, there's no warmup to be done.
+            if trackLine.tag == "EXT-X-ENDLIST":
+                break
+            if trackLine.tag == "EXT-X-DISCONTINUITY":
                 break
 
-        if urlIdx < 0:
-            return "", None
-        urlStr = self.dstIndex[urlIdx].b
+        urlStr = ""
+        if urlIdx >= 0:
+            base = trackIndex[urlIdx].b
+            srcDir = os.path.dirname(self.srcIndexPath)
+            urlStr = os.path.join(srcDir, base)
+
+        # Do not load ENDLIST, as it is sure to be different after the next refresh.
+        if len(trackIndex) > 0:
+            last = trackIndex[len(trackIndex)-1]
+            if last.tag == "EXT-X-ENDLIST":
+                trackIndex = trackIndex[ : len(trackIndex)-1]
+        self.trackIndex = trackIndex
+
         return urlStr, None
 
     def refresh(self):
-        srcIndex, err = parseIndex(self.srcIndexPath)
+        srcIndex, err = readIndex(self.srcIndexPath)
         if err:
             return None, err
 
-        # Check again that dst is the same as src, just to be on the safe side.
-        for i, dstLine in enumerate(self.dstIndex):
+        # Check again that track is the same as src, just to be on the safe side.
+        for i, trackLine in enumerate(self.trackIndex):
             if i >= len(srcIndex):
-                return None, f"dst longer than src {i} {len(srcIndex)} {self.dstIndex} {srcIndex} {inspect.getframeinfo(inspect.currentframe())}"
+                return None, f"track longer than src {i} {len(srcIndex)} {self.trackIndex} {srcIndex} {inspect.getframeinfo(inspect.currentframe())}"
             srcLine = srcIndex[i]
 
-            if dstLine.b != srcLine.b:
-                return None, f"dst not equal to src {i} {dstLine} {srcLine} {self.dstIndex} {srcIndex} {inspect.getframeinfo(inspect.currentframe())}"
+            if trackLine.b != srcLine.b:
+                return None, f"dst not equal to src {i} {trackLine} {srcLine} {self.trackIndex} {srcIndex} {inspect.getframeinfo(inspect.currentframe())}"
 
         # Find the next unprocessed segment.
         nextSegmentIdx = -1
-        i = len(self.dstIndex) - 1
+        i = len(self.trackIndex) - 1
         while True:
             i += 1
             if i >= len(srcIndex):
                 break
             srcLine = srcIndex[i]
 
-            newLines.append(srcLine)
-            if srcLine.tag == "":
+            if srcLine.tag == "EXT-X-ENDLIST" or srcLine.tag == "EXT-X-DISCONTINUITY" or srcLine.tag == "":
                 nextSegmentIdx = i
                 break
         if nextSegmentIdx == -1:
-            return [], None
+            nextSegmentIdx = len(srcIndex)-1
 
-        newLines = srcIndex[len(self.dstIndex) : (nextSegmentIdx+1)]
+        newLines = srcIndex[len(self.trackIndex) : (nextSegmentIdx+1)]
         return newLines, None
 
+    def _load(self):
+        trackIndex = []
+        if os.path.isfile(self.trackIndexPath):
+            trackIndex, err = readIndex(self.trackIndexPath)
+            if err:
+                return None, err
+        srcIndex, err = readIndex(self.srcIndexPath)
+        if err:
+            return None, err
+
+        # Find the index where track is different from src.
+        diffIdx = -1
+        for i, trackLine in enumerate(trackIndex):
+            if i >= len(srcIndex):
+                diffIdx = i
+                break
+            srcLine = srcIndex[i]
+
+            if trackLine.b != srcLine.b:
+                diffIdx = i
+                break
+        if diffIdx == -1:
+            diffIdx = len(trackIndex)
+
+        trackIndex = trackIndex[:diffIdx]
+        return trackIndex, None
+
     def save(self):
+        b = "\n".join([m.b for m in self.trackIndex])
+        with open(self.trackIndexPath, "w") as f:
+            f.write(b)
 
 
 def getImgSize(indexPath):
@@ -371,12 +442,12 @@ def getImgSize(indexPath):
     return h, w, None
 
 
-def handleVideo(dstTrack, src, handler):
-    rMux = av.open(src)
+def handleVideo(trackVidPath, srcVid, handler):
+    rMux = av.open(srcVid)
     rStream = rMux.streams.video[0]
 
-    if dstTrack != "":
-        trackMux = av.open(dstTrack, mode="w")
+    if trackVidPath != "":
+        trackMux = av.open(trackVidPath, mode="w")
         trackStream = trackMux.add_stream("h264", rate=rStream.average_rate)
         trackStream.width = rStream.width
         trackStream.height = rStream.height
@@ -387,12 +458,12 @@ def handleVideo(dstTrack, src, handler):
         img = frame.to_rgb().to_ndarray()
         out = handler.h(img, ts)
 
-        if dstTrack != "":
-            trackF = av.VideoFrame.from_ndarray(out.track, format="rgb24")
-            for packet in trackStream.encode(trackF):
+        if trackVidPath != "":
+            trackFrame = av.VideoFrame.from_ndarray(out.track, format="rgb24")
+            for packet in trackStream.encode(trackFrame):
                 trackMux.mux(packet)
 
-    if dstTrack != "":
+    if trackVidPath != "":
         for packet in trackStream.encode():
             trackMux.mux(packet)
         trackMux.close()
@@ -400,21 +471,33 @@ def handleVideo(dstTrack, src, handler):
     rMux.close()
 
 
-def process(differ, newLines, handler):
+def process(differ, handler):
+    newLines, err = differ.refresh()
+    if err:
+        return -1, False, err
+    logging.info("newLines %s", newLines)
     if len(newLines) == 0:
-        return None
-    sgm = newLines[len(newLines)-1].b
-    srcPath = os.path.join(src, sgm)
-    dstPath = os.path.join(dst, sgm)
-    handleVideo(dstPath, srcPath, handler)
+        return 5, False, None
+    last = newLines[len(newLines)-1]
+
+    isEOF = False
+    if last.tag == "EXT-X-ENDLIST" or last.tag == "EXT-X-DISCONTINUITY":
+        isEOF = True
+    if last.tag == "":
+        sgm = last.b
+        srcDir = os.path.dirname(differ.srcIndexPath)
+        trackDir = os.path.dirname(differ.trackIndexPath)
+        srcVidPath = os.path.join(srcDir, sgm)
+        trackVidPath = os.path.join(trackDir, sgm)
+        handleVideo(trackVidPath, srcVidPath, handler)
 
     for l in newLines:
-        differ.dstIndex.append(l)
+        differ.trackIndex.append(l)
     err = differ.save()
     if err:
-        return err
+        return -1, False, err
 
-    return None
+    return 0, isEOF, None
 
 
 def main():
@@ -436,13 +519,8 @@ def mainWithErr(args):
     logging.info("%s", args.c)
     cfg = json.loads(args.c)
 
-    dst = cfg["dst"]
-    src = cfg["src"]
-    differ = Differ(dst, src)
-    err = differ.newDiffIdx()
-    if err:
-        return err
-    height, width, err = getImgSize(src)
+    differ = Differ(cfg["TrackIndex"], cfg["Src"])
+    height, width, err = getImgSize(cfg["Src"])
     if err:
         return err
 
@@ -452,18 +530,22 @@ def mainWithErr(args):
     warmup, err = differ.getWarmup()
     if err:
         return err
+    logging.info("warmup \"%s\"", warmup)
     if warmup != "":
         handleVideo("", warmup, handler)
     if HAS_AI:
         handler.tracker.warmup = len(tracker.ids)
 
     while True:
-        newLines, err = differ.refresh()
+        waitSecs, isEOF, err = process(differ, handler)
         if err:
             return err
-        err = process(differ, newLines, handler)
-        if err:
-            return err
+        if isEOF:
+            break
+
+        stdin = readline(waitSecs)
+        if len(stdin) > 0:
+            break
 
     return None
 

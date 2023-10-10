@@ -15,6 +15,8 @@ import (
 type ByteQueue struct {
 	size int
 	q    *deque.Deque[byte]
+
+	debug bool
 }
 
 func NewByteQueue(size int) *ByteQueue {
@@ -24,6 +26,10 @@ func NewByteQueue(size int) *ByteQueue {
 }
 
 func (q *ByteQueue) Write(p []byte) (int, error) {
+	if q.debug {
+		log.Printf("%s", p)
+	}
+
 	q.q.PushBackSlice(p)
 
 	for q.q.Len() > q.size {
@@ -36,9 +42,9 @@ func (q *ByteQueue) Slice() []byte {
 	return q.q.Slice()
 }
 
-type quiterRunFn func(context.Context) error
+type loopFn func(context.Context) error
 
-func Loop(ctx context.Context, fn quiterRunFn) error {
+func Loop(ctx context.Context, fn loopFn) error {
 	lastLogT := time.Now().AddDate(-1, 0, 0)
 	for {
 		err := fn(ctx)

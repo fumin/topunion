@@ -3,16 +3,32 @@
 <head>
 </head>
 <body>
-{{range .RTSP}}
 <div>
-	<h3>{{.Name}}</h3>
-	<div>link: {{.Link}}</div>
-	<div>network interface: {{.NetworkInterface}}</div>
-	<div>mac address: {{.MacAddress}}</div>
-	<div>pid: {{.Pid}}</div>
-	<div>start: {{.Start}}</div>
-	<a href="{{.Live}}">Live</a>
+	<h2>RTSP</h2>
+	{{range .RTSP}}
+	<div>
+		<h3>{{.Name}}</h3>
+		<div>link: {{.Link}}</div>
+		<div>network interface: {{.NetworkInterface}}</div>
+		<div>mac address: {{.MacAddress}}</div>
+		<div>pid: {{.Pid}}</div>
+		<div>start: {{.Start}}</div>
+		<a href="{{.Live}}">Live</a>
+	</div>
+	{{end}}
 </div>
-{{end}}
+<div>
+	<h2>Count</h2>
+	{{range .Count}}
+	<div>
+		<h3>{{.TrackVideo}}</h3>
+		<div>config: {{.Config}}</div>
+		<div>pid: {{.Pid}}</div>
+		<div>start: {{.Start}}</div>
+		<a href="{{.TrackLive}}">Track live</a>
+	</div>
+	{{end}}
+</div>
+
 </body>
 </html>

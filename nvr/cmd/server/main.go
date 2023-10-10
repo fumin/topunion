@@ -86,11 +86,13 @@ func Serve(s *Server, w http.ResponseWriter, r *http.Request) {
 }
 
 func Quit(s *Server, w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := s.Server.Shutdown(ctx); err != nil {
-		log.Printf("%+v", err)
-	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := s.Server.Shutdown(ctx); err != nil {
+			log.Printf("%+v", err)
+		}
+	}()
 }
 
 //go:embed index.html
@@ -99,22 +101,24 @@ var indexTmpl = template.Must(template.New("").Parse(indexHTML))
 
 func Index(s *Server, w http.ResponseWriter, r *http.Request) {
 	rtsps := s.rtsp.All()
-	now := time.Now().In(time.UTC)
+	now := time.Now()
 	for i, info := range rtsps {
-		indexPath, err := s.videoIndex(now, info.Name)
-		if err != nil {
-			continue
-		}
-		v := url.Values{}
-		v.Set("s", s.hlsIndex(indexPath))
-		rtsps[i].Live = PathVideo + "?" + v.Encode()
+		rtsps[i].Live = s.videoURL(now, info.Name)
 	}
 	sort.Slice(rtsps, func(i, j int) bool { return rtsps[i].Name < rtsps[j].Name })
 
+	counts := s.count.All()
+	for i, info := range counts {
+		counts[i].TrackLive = s.videoURL(now, info.TrackVideo)
+	}
+	sort.Slice(counts, func(i, j int) bool { return counts[i].TrackVideo < counts[j].TrackVideo })
+
 	page := struct {
-		RTSP []rtspInfo
+		RTSP  []rtspInfo
+		Count []countInfo
 	}{}
 	page.RTSP = rtsps
+	page.Count = counts
 	indexTmpl.Execute(w, page)
 }
 
@@ -221,6 +225,43 @@ func (m *rtspMap) All() []rtspInfo {
 	return all
 }
 
+type countInfo struct {
+	Config     nvr.CountConfig
+	TrackVideo string
+
+	Pid   int
+	Start time.Time
+
+	TrackLive string
+}
+
+type countMap struct {
+	sync.RWMutex
+	m map[string]countInfo
+}
+
+func newCountMap() *countMap {
+	m := &countMap{}
+	m.m = make(map[string]countInfo)
+	return m
+}
+
+func (m *countMap) Set(info countInfo) {
+	m.Lock()
+	m.m[info.TrackVideo] = info
+	m.Unlock()
+}
+
+func (m *countMap) All() []countInfo {
+	m.RLock()
+	all := make([]countInfo, 0, len(m.m))
+	for _, info := range m.m {
+		all = append(all, info)
+	}
+	m.RUnlock()
+	return all
+}
+
 type Server struct {
 	ServeMux *http.ServeMux
 	Server   http.Server
@@ -230,7 +271,8 @@ type Server struct {
 
 	RecordDir string
 
-	rtsp *rtspMap
+	rtsp  *rtspMap
+	count *countMap
 }
 
 func NewServer(dir, addr string) (*Server, error) {
@@ -249,6 +291,7 @@ func NewServer(dir, addr string) (*Server, error) {
 	s.RecordDir = filepath.Join(dir, "record")
 
 	s.rtsp = newRTSPMap()
+	s.count = newCountMap()
 
 	handleFunc(s, PathHLSIndex, HLSIndex)
 	handleFunc(s, PathVideo, Video)
@@ -263,6 +306,17 @@ func (s *Server) serveURL(fpath string) string {
 	v := url.Values{}
 	v.Set("f", fpath)
 	return PathServe + "?" + v.Encode()
+}
+
+func (s *Server) videoURL(anyT time.Time, name string) string {
+	t := anyT.In(time.UTC)
+	indexPath, err := s.videoIndex(t, name)
+	if err != nil {
+		return ""
+	}
+	v := url.Values{}
+	v.Set("s", s.hlsIndex(indexPath))
+	return PathVideo + "?" + v.Encode()
 }
 
 func (s *Server) hlsIndex(fpath string) string {
@@ -322,6 +376,44 @@ func (s *Server) startRTSP(recordDir string, info rtspInfo) (context.CancelFunc,
 	return cancel, errC, nil
 }
 
+func (s *Server) startCount(recordDir, src string, config nvr.CountConfig) (context.CancelFunc, chan error, error) {
+	config.Src = filepath.Join(recordDir, src, nvr.IndexM3U8)
+	// Wait for src to appear.
+	var err error
+	for i := 0; i < nvr.HLSTime*3/2; i++ {
+		_, err := os.Stat(config.Src)
+		if err == nil {
+			break
+		}
+		<-time.After(time.Second)
+	}
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "")
+	}
+
+	trackVideo := src + "Track"
+	trackDir := filepath.Join(recordDir, trackVideo)
+	if err := os.MkdirAll(trackDir, os.ModePerm); err != nil {
+		return nil, nil, errors.Wrap(err, "")
+	}
+	config.TrackIndex = filepath.Join(trackDir, nvr.IndexM3U8)
+
+	onStart := func(pid int) {
+		info := countInfo{Config: config, TrackVideo: trackVideo}
+		info.Pid = pid
+		info.Start = time.Now()
+		s.count.Set(info)
+	}
+	loopFn := nvr.CountFn(s.Scripts.Count, config, onStart)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errC := make(chan error)
+	go func() {
+		errC <- nvr.Loop(ctx, loopFn)
+	}()
+	return cancel, errC, nil
+}
+
 func handleFunc(s *Server, httpPath string, fn func(*Server, http.ResponseWriter, *http.Request)) {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		fn(s, w, r)
@@ -372,7 +464,7 @@ func mainWithErr() error {
 	dayStr := now.Format("20060102")
 	recordName := nvr.TimeFormat(now)
 	recordDir := filepath.Join(server.RecordDir, dayStr, recordName)
-	recordDir = `C:\Users\a3367\work\topunion\nvr\server\record\20231006\20231006_053001_096262`
+	recordDir = `/Users/shaoyu/a/topunion/nvr/server/record/20231010/20231010_091344_836093`
 
 	rtsp0 := rtspInfo{
 		Name:             "rtsp0",
@@ -384,8 +476,19 @@ func mainWithErr() error {
 		Path:             "/h264_ulaw.sdp",
 	}
 	// rtsp0.Link = "rtsp://localhost:8554/rtsp"
-	rtsp0.Link = "sample/egg.mp4"
+	rtsp0.Link = "sample/short.mp4"
 	cancelRTSP0, rtsp0ErrC, err := server.startRTSP(recordDir, rtsp0)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+
+	rtsp0Count := nvr.CountConfig{}
+	rtsp0Count.Device = "cpu"
+	rtsp0Count.Mask.Enable = false
+	rtsp0Count.Yolo.Weights = "yolo_best.pt"
+	rtsp0Count.Yolo.Size = 640
+	rtsp0Count.Track.PrevCount = 10000
+	cancelRTSP0Count, rtsp0CountErrC, err := server.startCount(recordDir, rtsp0.Name, rtsp0Count)
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
@@ -397,6 +500,10 @@ func mainWithErr() error {
 
 	cancelRTSP0()
 	if err := <-rtsp0ErrC; err != nil {
+		log.Printf("%+v", err)
+	}
+	cancelRTSP0Count()
+	if err := <-rtsp0CountErrC; err != nil {
 		log.Printf("%+v", err)
 	}
 
