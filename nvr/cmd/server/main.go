@@ -23,6 +23,7 @@ import (
 	"github.com/pkg/errors"
 
 	"nvr"
+	"nvr/util"
 )
 
 var (
@@ -33,6 +34,8 @@ const (
 	PathHLSIndex = "/HLSIndex"
 	PathVideo    = "/Video"
 	PathServe    = "/Serve"
+
+	valueFilename = "v.json"
 )
 
 func HLSIndex(s *Server, w http.ResponseWriter, r *http.Request) {
@@ -122,47 +125,7 @@ func Index(s *Server, w http.ResponseWriter, r *http.Request) {
 	indexTmpl.Execute(w, page)
 }
 
-type arpHW struct {
-	ip string
-	hw string
-}
-
-func arpScan(networkInterface string) (map[string]arpHW, error) {
-	program := "arp-scan"
-	arg := []string{
-		"--interface=" + networkInterface,
-		"-l",
-		// Concise output to aid parsing.
-		"-x",
-	}
-	cmd := exec.Command(program, arg...)
-	b, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, errors.Wrap(err, "")
-	}
-
-	hws := make(map[string]arpHW)
-	scanner := bufio.NewScanner(bytes.NewBuffer(b))
-	for scanner.Scan() {
-		line := scanner.Text()
-		cols := strings.Split(line, "\n")
-		if len(cols) < 2 {
-			return nil, errors.Wrap(err, fmt.Sprintf("%#v %s", cols, b))
-		}
-
-		var hw arpHW
-		hw.ip = cols[0]
-		hw.hw = cols[1]
-		hws[hw.hw] = hw
-	}
-	if scanner.Err(); err != nil {
-		return nil, errors.Wrap(err, "")
-	}
-	return hws, nil
-}
-
-type rtspInfo struct {
-	// Fields related to the source stream.
+type RTSP struct {
 	Name             string
 	Link             string
 	NetworkInterface string
@@ -172,20 +135,15 @@ type rtspInfo struct {
 	Port             int
 	Path             string
 
-	// Fields related to background recording process.
-	Pid   int
-	Start time.Time
-
-	// Fields related to UI.
-	Live string
+	Video string `json:",omitempty"`
 }
 
-func (info rtspInfo) getLink() (string, error) {
+func (info RTSP) getLink() (string, error) {
 	if info.Link != "" {
 		return info.Link, nil
 	}
 
-	hws, err := arpScan(info.NetworkInterface)
+	hws, err := util.ARPScan(info.NetworkInterface)
 	if err != nil {
 		return "", errors.Wrap(err, "")
 	}
@@ -198,65 +156,56 @@ func (info rtspInfo) getLink() (string, error) {
 	return info.Link, nil
 }
 
-type rtspMap struct {
-	sync.RWMutex
-	m map[string]rtspInfo
-}
-
-func newRTSPMap() *rtspMap {
-	m := &rtspMap{}
-	m.m = make(map[string]rtspInfo)
-	return m
-}
-
-func (m *rtspMap) Set(info rtspInfo) {
-	m.Lock()
-	m.m[info.Name] = info
-	m.Unlock()
-}
-
-func (m *rtspMap) All() []rtspInfo {
-	m.RLock()
-	all := make([]rtspInfo, 0, len(m.m))
-	for _, info := range m.m {
-		all = append(all, info)
-	}
-	m.RUnlock()
-	return all
-}
-
-type countInfo struct {
+type Count struct {
 	Config     nvr.CountConfig
-	TrackVideo string
 
-	Pid   int
-	Start time.Time
-
-	TrackLive string
+	TrackVideo string `json:",omitempty"`
 }
 
-type countMap struct {
+type Record struct {
+	ID string
+	RTSP []RTSP
+	Count []Count
+
+	Create time.Time
+	Quit time.Time
+	Cleanup time.Time
+}
+
+type cancelDone struct {
+	cancel context.CancelFunc
+	done chan struct{}
+}
+
+type runningRecord struct {
+	record Record
+
+	rtspCancels []*cancelDone
+	countCancels []*cancelDone
+}
+
+type recordMap struct {
 	sync.RWMutex
-	m map[string]countInfo
+	m map[string]runningRecord
 }
 
-func newCountMap() *countMap {
-	m := &countMap{}
-	m.m = make(map[string]countInfo)
+func newRecordMap() *recordMap {
+	m := &recordMap{}
+	m.m = make(map[string]runningRecord)
 	return m
 }
 
-func (m *countMap) Set(info countInfo) {
+func (m *recordMap) Set(rr runningRecord) {
 	m.Lock()
-	m.m[info.TrackVideo] = info
+	m.m[rr.record.ID] = rr
 	m.Unlock()
 }
 
-func (m *countMap) All() []countInfo {
+func (m *recordMap) All() []runningRecord {
 	m.RLock()
-	all := make([]countInfo, 0, len(m.m))
-	for _, info := range m.m {
-		all = append(all, info)
+	all := make([]runningRecord, 0, len(m.m))
+	for _, rr := range m.m {
+		all = append(all, rr)
 	}
 	m.RUnlock()
 	return all
@@ -271,8 +220,7 @@ type Server struct {
 
 	RecordDir string
 
-	rtsp  *rtspMap
-	count *countMap
+	records *recordMap
 }
 
 func NewServer(dir, addr string) (*Server, error) {
@@ -290,8 +238,7 @@ func NewServer(dir, addr string) (*Server, error) {
 
 	s.RecordDir = filepath.Join(dir, "record")
 
-	s.rtsp = newRTSPMap()
-	s.count = newCountMap()
+	s.records = newRecordMap()
 
 	handleFunc(s, PathHLSIndex, HLSIndex)
 	handleFunc(s, PathVideo, Video)
@@ -353,27 +300,71 @@ func (s *Server) videoIndex(qt time.Time, name string) (string, error) {
 	return indexFName, nil
 }
 
-func (s *Server) startRTSP(recordDir string, info rtspInfo) (context.CancelFunc, chan error, error) {
+func (s *Server) writeRecord(record Record) error {
+	b, err := json.Marshal(record)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+
+	dayStr := record.ID[:8]
+	recordDir := filepath.Join(server.RecordDir, dayStr, record.ID)
+	fpath := filepath.Join(recordDir, valueFilename)
+
+	if err := os.WriteFile(fpath, b, os.ModePerm); err != nil {
+		return errors.Wrap(err, "")
+	}
+	return nil
+}
+
+func (s *Server) startRecord(rtsp []RTSP, count []Count) error {
+	record := runningRecord{
+		record: Record{
+			ID: nvr.TimeFormat(time.Now()),
+			RTSP: rtsp,
+			Count: count,
+			Create: now,
+		}
+	}
+
+	dayStr := record.record.ID[:8]
+	recordDir := filepath.Join(server.RecordDir, dayStr, record.record.ID)
+	// recordDir = `/Users/shaoyu/a/topunion/nvr/server/record/20231010/20231010_091344_836093`
+	if err := os.MkdirAll(recordDir, os.ModePerm); err != nil {
+		return errors.Wrap(err, "")
+	}
+	if err := s.writeRecord(record.record); err != nil {
+		return errors.Wrap(err, "")
+	}
+
+}
+
+func (s *Server) startRTSP(recordDir string, info rtspInfo, pidFile, stdout, stderr *os.File) (*cancelDone, error) {
 	dir := filepath.Join(recordDir, info.Name)
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
-		return nil, nil, errors.Wrap(err, "")
-	}
-	getInput := func() (string, error) {
-		return info.getLink()
+		return nil, errors.Wrap(err, "")
 	}
 	onStart := func(pid int) {
-		info.Pid = pid
-		info.Start = time.Now()
-		s.rtsp.Set(info)
+		ss := []string{
+			nvr.TimeFormat(time.Now()),
+			strconv.Itoa(pid),
+			"start",
+		}
+		pidFile.Write([]byte(strings.Join(ss, ",")+"\n"))
 	}
-	recordFn := nvr.RecordVideoFn(dir, getInput, onStart)
+	recordFn := nvr.RecordVideoFn(dir, info.getLink, stdout, stderr, onStart)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	errC := make(chan error)
+	done := make(chan struct)
+	cd := &cancelDone{cancel: cancel, done: done}
 	go func() {
+		err := recordFn(ctx)
+		ss := []string{
+			nvr.TimeFormat(time.Now()),
+		}
+
 		errC <- nvr.Loop(ctx, recordFn)
 	}()
-	return cancel, errC, nil
+	return cd, nil
 }
 
 func (s *Server) startCount(recordDir, src string, config nvr.CountConfig) (context.CancelFunc, chan error, error) {

@@ -112,7 +112,7 @@ func CountFn(script string, cfg CountConfig, onStart func(int)) loopFn {
 	return run
 }
 
-func RecordVideoFn(dir string, getInput func() (string, error), onStart func(int)) loopFn {
+func RecordVideoFn(dir string, getInput func() (string, error), stdout, stderr io.Writer, onStart func(int)) func(context.Context) error {
 	const program = "ffmpeg"
 	const hlsFlags = "" +
 		// Append to the same HLS index file.
@@ -158,9 +158,8 @@ func RecordVideoFn(dir string, getInput func() (string, error), onStart func(int
 		if err != nil {
 			return errors.Wrap(err, "")
 		}
-		outerrSize := 1024 * 1024
-		cmd.Stdout = NewByteQueue(outerrSize)
-		cmd.Stderr = NewByteQueue(outerrSize)
+		cmd.Stdout = stdout
+		cmd.Stderr = stderr
 		cmd.Cancel = func() error {
 			_, err := stdin.Write([]byte("q"))
 			return err
@@ -177,9 +176,7 @@ func RecordVideoFn(dir string, getInput func() (string, error), onStart func(int
 			return nil
 		}
 		if err != nil {
-			outB := cmd.Stdout.(*ByteQueue).Slice()
-			errB := cmd.Stderr.(*ByteQueue).Slice()
-			return errors.Wrap(err, fmt.Sprintf("stdout: %s, stderr: %s", outB, errB))
+			return errors.Wrap(err, "")
 		}
 		return nil
 	}

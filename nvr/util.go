@@ -42,29 +42,6 @@ func (q *ByteQueue) Slice() []byte {
 	return q.q.Slice()
 }
 
-type loopFn func(context.Context) error
-
-func Loop(ctx context.Context, fn loopFn) error {
-	lastLogT := time.Now().AddDate(-1, 0, 0)
-	for {
-		err := fn(ctx)
-		if err != nil {
-			// Only print errors intermitently to prevent constantly failing functions from overwhelming our logs.
-			now := time.Now()
-			if now.Sub(lastLogT) > time.Minute {
-				lastLogT = now
-				log.Printf("%+v", err)
-			}
-		}
-
-		select {
-		case <-ctx.Done():
-			return err
-		default:
-		}
-	}
-}
-
 const ymdhmsFormat = "20060102_150405"
 
 func TimeFormat(inT time.Time) string {
