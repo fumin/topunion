@@ -4,7 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
-	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"

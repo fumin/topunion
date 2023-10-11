@@ -2,8 +2,11 @@ package nvr
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -38,7 +41,7 @@ func TimeParse(name string) (time.Time, error) {
 	return parsed, nil
 }
 
-func newCmdFn(w io.Writer, fn func(context.Context)(*exec.Cmd, error)) func(context.Context) {
+func newCmdFn(w io.Writer, fn func(context.Context) (*exec.Cmd, error)) func(context.Context) {
 	run := func(ctx context.Context) {
 		cmd, err := fn(ctx)
 		if err != nil {
@@ -49,37 +52,37 @@ func newCmdFn(w io.Writer, fn func(context.Context)(*exec.Cmd, error)) func(cont
 		if err := cmd.Start(); err != nil {
 			onCmdInit(w, err)
 			return
-                }
-                onCmdStart(w, cmd)
+		}
+		onCmdStart(w, cmd)
 
-                err = cmd.Wait()
-                onCmdExit(w, cmd, err)
+		err = cmd.Wait()
+		onCmdExit(w, cmd, err)
 	}
 	return run
 }
 
 const (
-	CmdEventInit = "Init"
+	CmdEventInit  = "Init"
 	CmdEventStart = "Start"
-	CmdEventExit = "Exit"
+	CmdEventExit  = "Exit"
 )
 
 type CmdMsg struct {
-	T time.Time
-	Pid int
+	T     time.Time
+	Pid   int
 	Event string
-	Err string `json:",omitempty"`
+	Err   string `json:",omitempty"`
 }
 
-func onCmdInit(w *io.Writer, initErr error) {
+func onCmdInit(w io.Writer, initErr error) {
 	if err := onCmdInitErr(w, initErr); err != nil {
 		log.Printf("%+v", err)
 	}
 }
 
-func onCmdInitErr(w *io.Writer, initErr error) error {
+func onCmdInitErr(w io.Writer, initErr error) error {
 	m := CmdMsg{
-		T: time.Now(),
+		T:     time.Now(),
 		Event: CmdEventInit,
 	}
 	if initErr != nil {
@@ -103,8 +106,8 @@ func onCmdStart(w io.Writer, cmd *exec.Cmd) {
 
 func onCmdStartErr(w io.Writer, cmd *exec.Cmd) error {
 	m := CmdMsg{
-		T: time.Now(),
-		Pid: cmd.Process.Pid,
+		T:     time.Now(),
+		Pid:   cmd.Process.Pid,
 		Event: CmdEventStart,
 	}
 	b, err := json.Marshal(m)
@@ -123,14 +126,14 @@ func onCmdExit(w io.Writer, cmd *exec.Cmd, waitErr error) {
 	}
 }
 
-func onCmdExitErr(w io.Writer, cmd *exec.Cmd, waitErr error) {
+func onCmdExitErr(w io.Writer, cmd *exec.Cmd, waitErr error) error {
 	m := CmdMsg{
-		T: time.Now(),
-		Pid: cmd.Process.Pid,
+		T:     time.Now(),
+		Pid:   cmd.Process.Pid,
 		Event: CmdEventExit,
 	}
 	if waitErr != nil {
-		m.Err = fmt.Sprintf("%+v", err)
+		m.Err = fmt.Sprintf("%+v", waitErr)
 	}
 	b, err := json.Marshal(m)
 	if err != nil {

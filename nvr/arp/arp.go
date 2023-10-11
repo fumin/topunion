@@ -1,7 +1,17 @@
 package arp
 
+import (
+	"bufio"
+	"bytes"
+	"fmt"
+	"os/exec"
+	"strings"
+
+	"github.com/pkg/errors"
+)
+
 type Hardware struct {
-	IP string
+	IP         string
 	MacAddress string
 }
 

@@ -11,7 +11,6 @@ import select
 import sys
 import time
 
-import inputimeout
 import numpy as np
 import torch
 import torchvision
@@ -447,7 +446,8 @@ def handleVideo(trackVidPath, srcVid, handler):
     rStream = rMux.streams.video[0]
 
     if trackVidPath != "":
-        trackMux = av.open(trackVidPath, mode="w")
+        options = {"movflags":"empty_moov+frag_keyframe"}
+        trackMux = av.open(trackVidPath, mode="w", format="mp4", options=options)
         trackStream = trackMux.add_stream("h264", rate=rStream.average_rate)
         trackStream.width = rStream.width
         trackStream.height = rStream.height

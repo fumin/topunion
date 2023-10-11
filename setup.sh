@@ -133,6 +133,12 @@ snap install wps-office
 # Make it so that everyone can run arp-scan.
 chmod u+s /usr/sbin/arp-scan
 
+GOTAR=go1.21.3.linux-amd64.tar.gz
+wget https://go.dev/dl/$GOTAR
+rm -rf /usr/local/go && tar -C /usr/local -xzf $GOTAR
+rm $GOTAR
+go install golang.org/x/tools/cmd/goimports@latest
+
 MYUSER=topunion
 sudo -u $MYUSER pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 

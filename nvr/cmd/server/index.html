@@ -4,14 +4,63 @@
 </head>
 <body>
 
-<div>
-    {{if eq .CurrentRecord.ID ""}}
-    <button>Stop</button>
-    <a href="{{.CurrentRecord.Link}}">{{.CurrentRecord.ID}}</a>
-    {{else}}
-    <button>Start</button>
-    {{end}}
+<div id="info">
+<div id="start-section">
+	<button id="start-btn">Start</button>
+</div>
+<div id="stop-section">
+	<button id="stop-btn">Stop</button>
+	<a href="{{.CurrentRecord.Link}}">{{.CurrentRecord.ID}}</a>
 </div>
 
+<script>
+let page = {{.}};
+if (page.CurrentRecord.ID == "") {
+	let section = document.querySelector("#stop-section");
+	section.style.display = "none";
+} else {
+	let section = document.querySelector("#start-section");
+	section.style.display = "none";
+}
+let startBtn = document.querySelector("#start-btn");
+startBtn.addEventListener("click", function(ev){
+	startBtn.disabled = true;
+	document.querySelector("#info").textContent = "starting...";
+	let req = new XMLHttpRequest();
+	req.addEventListener("loadend", function(ev){
+		startBtn.disabled = false;
+		document.querySelector("#info").textContent = "";
+	});
+	req.addEventListener("error", function(ev){
+		document.querySelector("#info").textContent = "http error";
+	});
+	req.addEventListener("load", function(ev){
+		let resp = JSON.parse(ev.target.responseText);
+		window.location.reload();
+	});
+	req.open("POST", page.StartURL);
+	req.send();
+});
+let stopBtn = document.querySelector("#stop-btn");
+stopBtn.addEventListener("click", function(ev){
+	stopBtn.disabled = true;
+	document.querySelector("#info").textContent = "stoping...";
+	let req = new XMLHttpRequest();
+	req.addEventListener("loadend", function(ev){
+		stopBtn.disabled = false;
+		document.querySelector("#info").textContent = "";
+	});
+	req.addEventListener("error", function(ev){
+		document.querySelector("#info").textContent = "http error";
+	});
+	req.addEventListener("load", function(ev){
+		let resp = JSON.parse(ev.target.responseText);
+		window.location.reload();
+	});
+	req.open("POST", page.StopURL);
+	req.send();
+});
+
+</script>
 </body>
 </html>
