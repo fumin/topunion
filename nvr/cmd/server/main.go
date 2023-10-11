@@ -23,7 +23,7 @@ import (
 	"github.com/pkg/errors"
 
 	"nvr"
-	"nvr/util"
+	"nvr/arp"
 )
 
 var (
@@ -31,12 +31,33 @@ var (
 )
 
 const (
+	PathStartRecord = "/StartRecord"
+	PathStopRecord = "/StopRecord"
+	PathRecordPage = "/RecordPage"
 	PathHLSIndex = "/HLSIndex"
 	PathVideo    = "/Video"
 	PathServe    = "/Serve"
 
 	valueFilename = "v.json"
+	stdouterrFilename = "stdouterr.txt"
+	statusFilename = "status.txt"
 )
+
+func StartRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}, error) {
+	id, err = s.startRecord(record)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	resp := struct{ID string}{ID: id}
+	return resp, nil
+}
+
+func StopRecord(s *Server, w http.ResponseWriter, r *http.Request) error {
+	id := r.FormValue("id")
+	s.records.del(id)
+	resp := struct{}{}
+	return resp, nil
+}
 
 func HLSIndex(s *Server, w http.ResponseWriter, r *http.Request) {
 	fpath := r.FormValue("f")
@@ -88,14 +109,26 @@ func Serve(s *Server, w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, fpath)
 }
 
-func Quit(s *Server, w http.ResponseWriter, r *http.Request) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		if err := s.Server.Shutdown(ctx); err != nil {
-			log.Printf("%+v", err)
-		}
-	}()
+//go:embed record_page.html
+var recordPageHTML string
+var recordPageTmpl = template.Must(template.New("").Parse(recordPageHTML))
+
+func RecordPage(s *Server, w http.ResponseWriter, r *http.Request) {
+	id := r.FormValue("id")
+	record, err := s.readRecord(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	rd := record.Dir(s.RecordDir)
+	for i, rtsp := range record.RTSP {
+		indexPath := filepath.Join(rd, rtsp.Name, nvr.IndexM3U8)
+		record.RTSP[i].Video = videoURL(indexPath)
+	}
+	for i, c := range record.Count {
+		record.Count[i].TrackVideo = videoURL(c.Config.TrackIndex)
+	}
+	recordPageTmpl.Execute(w, record)
 }
 
 //go:embed index.html
@@ -103,25 +136,24 @@ var indexHTML string
 var indexTmpl = template.Must(template.New("").Parse(indexHTML))
 
 func Index(s *Server, w http.ResponseWriter, r *http.Request) {
-	rtsps := s.rtsp.All()
-	now := time.Now()
-	for i, info := range rtsps {
-		rtsps[i].Live = s.videoURL(now, info.Name)
-	}
-	sort.Slice(rtsps, func(i, j int) bool { return rtsps[i].Name < rtsps[j].Name })
-
-	counts := s.count.All()
-	for i, info := range counts {
-		counts[i].TrackLive = s.videoURL(now, info.TrackVideo)
-	}
-	sort.Slice(counts, func(i, j int) bool { return counts[i].TrackVideo < counts[j].TrackVideo })
-
 	page := struct {
-		RTSP  []rtspInfo
-		Count []countInfo
+		CurrentRecord struct{
+			ID string
+			Link string
+		}
 	}{}
-	page.RTSP = rtsps
-	page.Count = counts
+
+	records := s.records.all()
+	for _, r := range records {
+		if r.Stop.IsZero() {
+			page.CurrentRecord.ID = r.ID
+			v := url.Values{}
+			v.Set("id", r.ID)
+			page.CurrentRecord.Link = PathRecordPage + "?" + v.Encode()
+			break
+		}
+	}
+
 	indexTmpl.Execute(w, page)
 }
 
@@ -143,7 +175,7 @@ func (info RTSP) getLink() (string, error) {
 		return info.Link, nil
 	}
 
-	hws, err := util.ARPScan(info.NetworkInterface)
+	hws, err := arp.Scan(info.NetworkInterface)
 	if err != nil {
 		return "", errors.Wrap(err, "")
 	}
@@ -156,10 +188,47 @@ func (info RTSP) getLink() (string, error) {
 	return info.Link, nil
 }
 
+func (rtsp RTSP) prepare(recordDir string) error {
+	dir := filepath.Join(recordDir, rtsp.Name)
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		return errors.Wrap(err, "")
+	}
+	return nil
+}
+
 type Count struct {
+	Src string
 	Config     nvr.CountConfig
 
 	TrackVideo string `json:",omitempty"`
+}
+
+func (c Count) fill(recordDir string) Count {
+	c.Config.Src = filepath.Join(recordDir, count.Src, nvr.IndexM3U8)
+	c.Config.TrackIndex = filepath.Join(recordDir, count.Src+"Track", nvr.IndexM3U8)
+	return c
+}
+
+func (c Count) prepare() error {
+	trackDir := filepath.Dir(c.Config.TrackIndex)
+	if err := os.MkdirAll(trackDir, os.ModePerm); err != nil {
+		return errors.Wrap(err, "")
+	}
+
+	// Wait for src to appear.
+	var err error
+	for i := 0; i < nvr.HLSTime*3/2; i++ {
+		_, err = os.Stat(c.Config.Src)
+		if err == nil {
+			break
+		}
+		<-time.After(time.Second)
+	}
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+
+	return nil
 }
 
 type Record struct {
@@ -167,21 +236,21 @@ type Record struct {
 	RTSP []RTSP
 	Count []Count
 
+	Err string
 	Create time.Time
-	Quit time.Time
+	Stop time.Time
 	Cleanup time.Time
 }
 
-type cancelDone struct {
-	cancel context.CancelFunc
-	done chan struct{}
+func (r Record) Dir(root string) string {
+	dayStr := record.ID[:8]
+	dir := filepath.Join(root, dayStr, record.ID)
+	return dir
 }
 
 type runningRecord struct {
 	record Record
-
-	rtspCancels []*cancelDone
-	countCancels []*cancelDone
+	cancel context.CancelFunc
 }
 
 type recordMap struct {
@@ -195,13 +264,22 @@ func newRecordMap() *recordMap {
 	return m
 }
 
-func (m *recordMap) Set(rr runningRecord) {
+func (m *recordMap) set(rr runningRecord) {
 	m.Lock()
+	defer m.Unlock()
+	if _, ok := m.m[rr.record.ID]; ok {
+		panic(fmt.Sprintf("%#v", m))
+	}
 	m.m[rr.record.ID] = rr
+}
+
+func (m *recordMap) del(id string) {
+	m.Lock()
+	delete(m.m, id)
 	m.Unlock()
 }
 
-func (m *recordMap) All() []runningRecord {
+func (m *recordMap) all() []runningRecord {
 	m.RLock()
 	all := make([]runningRecord, 0, len(m.m))
 	for _, rr := range m.m {
@@ -240,10 +318,12 @@ func NewServer(dir, addr string) (*Server, error) {
 
 	s.records = newRecordMap()
 
+	handleJSON(s, PathStartRecord, StartRecord)
+	handleJSON(s, PathStopRecord, StopRecord)
+	handleFunc(s, PathRecordPage, RecordPage)
 	handleFunc(s, PathHLSIndex, HLSIndex)
 	handleFunc(s, PathVideo, Video)
 	handleFunc(s, PathServe, Serve)
-	handleFunc(s, "/Quit", Quit)
 	handleFunc(s, "/", Index)
 
 	return s, nil
@@ -255,12 +335,7 @@ func (s *Server) serveURL(fpath string) string {
 	return PathServe + "?" + v.Encode()
 }
 
-func (s *Server) videoURL(anyT time.Time, name string) string {
-	t := anyT.In(time.UTC)
-	indexPath, err := s.videoIndex(t, name)
-	if err != nil {
-		return ""
-	}
+func (s *Server) videoURL(indexPath string) string {
 	v := url.Values{}
 	v.Set("s", s.hlsIndex(indexPath))
 	return PathVideo + "?" + v.Encode()
@@ -272,137 +347,143 @@ func (s *Server) hlsIndex(fpath string) string {
 	return PathHLSIndex + "?" + v.Encode()
 }
 
-func (s *Server) videoIndex(qt time.Time, name string) (string, error) {
-	t := qt.In(time.UTC)
-	dayDir := filepath.Join(s.RecordDir, t.Format("20060102"))
-	entries, err := os.ReadDir(dayDir)
-	if err != nil {
-		return "", errors.Wrap(err, "")
-	}
-
-	lastRecord := ""
-	for i := len(entries) - 1; i >= 0; i-- {
-		rec := entries[i].Name()
-		startT, err := nvr.TimeParse(rec)
-		if err != nil {
-			return "", errors.Wrap(err, fmt.Sprintf("\"%s\"", rec))
-		}
-		if startT.Before(t) {
-			lastRecord = rec
-			break
-		}
-	}
-	if lastRecord == "" {
-		return "", errors.Errorf("not found %s", dayDir)
-	}
-
-	indexFName := filepath.Join(dayDir, lastRecord, name, "index.m3u8")
-	return indexFName, nil
-}
-
 func (s *Server) writeRecord(record Record) error {
 	b, err := json.Marshal(record)
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
 
-	dayStr := record.ID[:8]
-	recordDir := filepath.Join(server.RecordDir, dayStr, record.ID)
-	fpath := filepath.Join(recordDir, valueFilename)
+	recordDir := record.Dir(server.RecordDir)
+	if err := os.MkdirAll(recordDir, os.ModePerm); err != nil {
+		return errors.Wrap(err, "")
+	}
 
+	fpath := filepath.Join(recordDir, valueFilename)
 	if err := os.WriteFile(fpath, b, os.ModePerm); err != nil {
 		return errors.Wrap(err, "")
 	}
 	return nil
 }
 
-func (s *Server) startRecord(rtsp []RTSP, count []Count) error {
-	record := runningRecord{
-		record: Record{
-			ID: nvr.TimeFormat(time.Now()),
-			RTSP: rtsp,
-			Count: count,
-			Create: now,
-		}
+func (s *Server) readRecord(id string) (Record, error) {
+	if len(id) < 8 {
+		return Record{}, errors.Errorf("%d", len(id))
 	}
-
-	dayStr := record.record.ID[:8]
-	recordDir := filepath.Join(server.RecordDir, dayStr, record.record.ID)
-	// recordDir = `/Users/shaoyu/a/topunion/nvr/server/record/20231010/20231010_091344_836093`
-	if err := os.MkdirAll(recordDir, os.ModePerm); err != nil {
-		return errors.Wrap(err, "")
-	}
-	if err := s.writeRecord(record.record); err != nil {
-		return errors.Wrap(err, "")
-	}
-
-}
-
-func (s *Server) startRTSP(recordDir string, info rtspInfo, pidFile, stdout, stderr *os.File) (*cancelDone, error) {
-	dir := filepath.Join(recordDir, info.Name)
-	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
-		return nil, errors.Wrap(err, "")
-	}
-	onStart := func(pid int) {
-		ss := []string{
-			nvr.TimeFormat(time.Now()),
-			strconv.Itoa(pid),
-			"start",
-		}
-		pidFile.Write([]byte(strings.Join(ss, ",")+"\n"))
-	}
-	recordFn := nvr.RecordVideoFn(dir, info.getLink, stdout, stderr, onStart)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct)
-	cd := &cancelDone{cancel: cancel, done: done}
-	go func() {
-		err := recordFn(ctx)
-		ss := []string{
-			nvr.TimeFormat(time.Now()),
-		}
-
-		errC <- nvr.Loop(ctx, recordFn)
-	}()
-	return cd, nil
-}
-
-func (s *Server) startCount(recordDir, src string, config nvr.CountConfig) (context.CancelFunc, chan error, error) {
-	config.Src = filepath.Join(recordDir, src, nvr.IndexM3U8)
-	// Wait for src to appear.
-	var err error
-	for i := 0; i < nvr.HLSTime*3/2; i++ {
-		_, err := os.Stat(config.Src)
-		if err == nil {
-			break
-		}
-		<-time.After(time.Second)
-	}
+	dayStr := id[:8]
+	fpath := filepath.Join(server.RecordDir, dayStr, id, valueFilename)
+	b, err := os.ReadFile(fpath)
 	if err != nil {
-		return nil, nil, errors.Wrap(err, "")
+		return Record{}, errors.Wrap(err, "")
+	}
+	var record Record
+	if err := json.Unmarshal(b, &record); err != nil {
+		return Record{}, errors.Wrap(err, "")
+	}
+	return record, nil
+}
+
+func (s *Server) startRecord(record Record) (string, error) {
+	rr := &runningRecord{record: record}
+	err := startRunningRecord(rr)
+	if err == nil {
+		return rr.record.ID, nil
 	}
 
-	trackVideo := src + "Track"
-	trackDir := filepath.Join(recordDir, trackVideo)
-	if err := os.MkdirAll(trackDir, os.ModePerm); err != nil {
-		return nil, nil, errors.Wrap(err, "")
+	rr.record.Err = fmt.Sprintf("%+v", err)
+	if err := writeRecord(rr.record); err != nil {
+		log.Printf("%+v", err)
 	}
-	config.TrackIndex = filepath.Join(trackDir, nvr.IndexM3U8)
+	return "", errors.Wrap(err, "")
+}
 
-	onStart := func(pid int) {
-		info := countInfo{Config: config, TrackVideo: trackVideo}
-		info.Pid = pid
-		info.Start = time.Now()
-		s.count.Set(info)
+func (s *Server) startRunningRecord(rr *runningRecord) error {
+	now := time.Now()
+	rr.record.ID = nvr.TimeFormat(now)
+	rr.record.Create = now
+	recordDir := rr.record.Dir(server.RecordDir)
+	for i, c := range rr.record {
+		rr.record.Count[i] = c.fill(recordDir)
 	}
-	loopFn := nvr.CountFn(s.Scripts.Count, config, onStart)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	errC := make(chan error)
-	go func() {
-		errC <- nvr.Loop(ctx, loopFn)
-	}()
-	return cancel, errC, nil
+	defer cancel()
+	rr.cancel = cancel
+	s.records.set(rr)
+	defer s.records.del(rr.record.ID)
+	if err := s.writeRecord(rr.record); err != nil {
+		return errors.Wrap(err, "")
+	}
+
+	// Prepare RTSPs.
+	fns := make([]func(context.Context))
+	for _, rtsp := range record.RTSP {
+		if err := rtsp.prepare(recordDir); err != nil {
+			return errors.Wrap(err, "")
+		}
+		stdouterrPath := filepath.Join(dir, stdouterrFilename)
+		stdouterrF, err := os.Create(stdouterrPath)
+		if err != nil {
+			return errors.Wrap(err, "")
+		}
+		defer stdouterrF.Close()
+		statusPath := filepath.Join(dir, statusFilename)
+		statusF, err := os.Create(statusPath)
+		if err != nil {
+			return errors.Wrap(err, "")
+		}
+		defer statusF.Close()
+		fn := rtspFn(dir, rtsp.getLink, stdouterrF, stdouterrF, statusF)
+		fns = append(fns, fn)
+	}
+	// Prepare counts.
+	for _, c := range rr.record.Count {
+		if err := c.prepare(); err != nil {
+			return errors.Wrap(err, "")
+		}
+		stdouterrPath := filepath.Join(dir, stdouterrFilename)
+		stdouterrF, err := os.Create(stdouterrPath)
+		if err != nil {
+			return errors.Wrap(err, "")
+		}
+		defer stdouterrF.Close()
+		statusPath := filepath.Join(dir, statusFilename)
+		statusF, err := os.Create(statusPath)
+		if err != nil {
+			return errors.Wrap(err, "")
+		}
+		defer statusF.Close()
+		fn := nvr.CountFn(s.Scripts.Count, count.config, stdouterrF, stdouterrF, statusF)
+		fns = append(fns, fn)
+	}
+
+	var wg sync.WaitGroup
+	for _, fn := range fns {
+		wg.Add(1)
+		go func(){
+			defer wg.Done()
+			for {
+				fn(ctx)
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+		}()
+	}
+
+	<-ctx.Done()
+	rr.record.Stop = time.Now()
+	s.records.set(rr)
+	if err := s.writeRecord(rr.record); err != nil {
+		return errors.Wrap(err, "")
+	}
+
+	wg.Wait()
+	rr.record.Cleanup = time.Now()
+	if err := s.writeRecord(rr.record); err != nil {
+		return errors.Wrap(err, "")
+	}
 }
 
 func handleFunc(s *Server, httpPath string, fn func(*Server, http.ResponseWriter, *http.Request)) {

@@ -69,50 +69,34 @@ type CountConfig struct {
 	}
 }
 
-func CountFn(script string, cfg CountConfig, onStart func(int)) loopFn {
-	c, err := json.Marshal(cfg)
-	if err != nil {
-		panic(err)
-	}
-	arg := []string{script, "-c=" + string(c)}
+func CountFn(script string, cfg CountConfig, stdout, stderr, statusW io.Writer) func(context.Context) {
 	const program = "python3"
-	run := func(ctx context.Context) error {
+	run := func(ctx context.Context) (*exec.Cmd, error) {
+		c, err := json.Marshal(cfg)
+		if err != nil {
+			return nil, errors.Wrap(err, "")
+		}
+		arg := []string{script, "-c=" + string(c)}
+
 		cmd := exec.CommandContext(ctx, program, arg...)
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
-			return errors.Wrap(err, "")
+			return nil, errors.Wrap(err, "")
 		}
-		outerrSize := 1024 * 1024
-		cmd.Stdout = NewByteQueue(outerrSize)
-		stderr := NewByteQueue(outerrSize)
-		stderr.debug = true
+		cmd.Stdout = stdout
 		cmd.Stderr = stderr
 		cmd.Cancel = func() error {
 			_, err := stdin.Write([]byte("q\n"))
 			return err
 		}
-		cmd.WaitDelay = 3 * 60 * time.Second
+		cmd.WaitDelay = 60 * time.Second
 
-		if err := cmd.Start(); err != nil {
-			return errors.Wrap(err, "")
-		}
-		onStart(cmd.Process.Pid)
-
-		err = cmd.Wait()
-		if err == context.Canceled {
-			return nil
-		}
-		if err != nil {
-			outB := cmd.Stdout.(*ByteQueue).Slice()
-			errB := cmd.Stderr.(*ByteQueue).Slice()
-			return errors.Wrap(err, fmt.Sprintf("stdout: %s, stderr: %s, program: %s, arg: %#v", outB, errB, program, arg))
-		}
-		return nil
+		return cmd, nil
 	}
-	return run
+	return newCmdFn(statusW, run)
 }
 
-func RecordVideoFn(dir string, getInput func() (string, error), stdout, stderr io.Writer, onStart func(int)) func(context.Context) error {
+func RecordVideoFn(dir string, getInput func() (string, error), stdout, stderr, statusW io.Writer) func(context.Context) {
 	const program = "ffmpeg"
 	const hlsFlags = "" +
 		// Append to the same HLS index file.
@@ -121,10 +105,10 @@ func RecordVideoFn(dir string, getInput func() (string, error), stdout, stderr i
 		"+second_level_segment_duration" +
 		// Add program start time info.
 		"+program_date_time"
-	run := func(ctx context.Context) error {
+	run := func(ctx context.Context) (*exec.Cmd, error) {
 		input, err := getInput()
 		if err != nil {
-			return errors.Wrap(err, "")
+			return nil, errors.Wrap(err, "")
 		}
 
 		segmentFName := filepath.Join(dir, "%s_%%06t.ts")
@@ -156,7 +140,7 @@ func RecordVideoFn(dir string, getInput func() (string, error), stdout, stderr i
 		cmd := exec.CommandContext(ctx, program, arg...)
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
-			return errors.Wrap(err, "")
+			return nil, errors.Wrap(err, "")
 		}
 		cmd.Stdout = stdout
 		cmd.Stderr = stderr
@@ -166,19 +150,7 @@ func RecordVideoFn(dir string, getInput func() (string, error), stdout, stderr i
 		}
 		cmd.WaitDelay = 10 * time.Second
 
-		if err := cmd.Start(); err != nil {
-			return errors.Wrap(err, "")
-		}
-		onStart(cmd.Process.Pid)
-
-		err = cmd.Wait()
-		if err == context.Canceled {
-			return nil
-		}
-		if err != nil {
-			return errors.Wrap(err, "")
-		}
-		return nil
+		return cmd, nil
 	}
-	return run
+	return newCmdFn(statusW, run)
 }

@@ -8,39 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/carlmjohnson/deque"
 	"github.com/pkg/errors"
 )
-
-type ByteQueue struct {
-	size int
-	q    *deque.Deque[byte]
-
-	debug bool
-}
-
-func NewByteQueue(size int) *ByteQueue {
-	q := &ByteQueue{size: size}
-	q.q = deque.Make[byte](size)
-	return q
-}
-
-func (q *ByteQueue) Write(p []byte) (int, error) {
-	if q.debug {
-		log.Printf("%s", p)
-	}
-
-	q.q.PushBackSlice(p)
-
-	for q.q.Len() > q.size {
-		q.q.RemoveFront()
-	}
-	return len(p), nil
-}
-
-func (q *ByteQueue) Slice() []byte {
-	return q.q.Slice()
-}
 
 const ymdhmsFormat = "20060102_150405"
 
@@ -67,4 +36,108 @@ func TimeParse(name string) (time.Time, error) {
 
 	parsed := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), nanoSec, t.Location())
 	return parsed, nil
+}
+
+func newCmdFn(w io.Writer, fn func(context.Context)(*exec.Cmd, error)) func(context.Context) {
+	run := func(ctx context.Context) {
+		cmd, err := fn(ctx)
+		if err != nil {
+			onCmdInit(w, err)
+			return
+		}
+
+		if err := cmd.Start(); err != nil {
+			onCmdInit(w, err)
+			return
+                }
+                onCmdStart(w, cmd)
+
+                err = cmd.Wait()
+                onCmdExit(w, cmd, err)
+	}
+	return run
+}
+
+const (
+	CmdEventInit = "Init"
+	CmdEventStart = "Start"
+	CmdEventExit = "Exit"
+)
+
+type CmdMsg struct {
+	T time.Time
+	Pid int
+	Event string
+	Err string `json:",omitempty"`
+}
+
+func onCmdInit(w *io.Writer, initErr error) {
+	if err := onCmdInitErr(w, initErr); err != nil {
+		log.Printf("%+v", err)
+	}
+}
+
+func onCmdInitErr(w *io.Writer, initErr error) error {
+	m := CmdMsg{
+		T: time.Now(),
+		Event: CmdEventInit,
+	}
+	if initErr != nil {
+		m.Err = fmt.Sprintf("%+v", initErr)
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	if _, err := w.Write(append(b, '\n')); err != nil {
+		return errors.Wrap(err, "")
+	}
+	return nil
+}
+
+func onCmdStart(w io.Writer, cmd *exec.Cmd) {
+	if err := onCmdStartErr(w, cmd); err != nil {
+		log.Printf("%+v", err)
+	}
+}
+
+func onCmdStartErr(w io.Writer, cmd *exec.Cmd) error {
+	m := CmdMsg{
+		T: time.Now(),
+		Pid: cmd.Process.Pid,
+		Event: CmdEventStart,
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	if _, err := w.Write(append(b, '\n')); err != nil {
+		return errors.Wrap(err, "")
+	}
+	return nil
+}
+
+func onCmdExit(w io.Writer, cmd *exec.Cmd, waitErr error) {
+	if err := onCmdExitErr(w, cmd, waitErr); err != nil {
+		log.Printf("%+v", err)
+	}
+}
+
+func onCmdExitErr(w io.Writer, cmd *exec.Cmd, waitErr error) {
+	m := CmdMsg{
+		T: time.Now(),
+		Pid: cmd.Process.Pid,
+		Event: CmdEventExit,
+	}
+	if waitErr != nil {
+		m.Err = fmt.Sprintf("%+v", err)
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	if _, err := w.Write(append(b, '\n')); err != nil {
+		return errors.Wrap(err, "")
+	}
+	return nil
 }

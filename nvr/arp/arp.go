@@ -1,11 +1,11 @@
-package util
+package arp
 
-type ARPHardware struct {
+type Hardware struct {
 	IP string
 	MacAddress string
 }
 
-func ARPScan(networkInterface string) (map[string]ARPHardware, error) {
+func Scan(networkInterface string) (map[string]Hardware, error) {
 	program := "arp-scan"
 	arg := []string{
 		"--interface=" + networkInterface,
@@ -19,7 +19,7 @@ func ARPScan(networkInterface string) (map[string]ARPHardware, error) {
 		return nil, errors.Wrap(err, "")
 	}
 
-	hws := make(map[string]ARPHardware)
+	hws := make(map[string]Hardware)
 	scanner := bufio.NewScanner(bytes.NewBuffer(b))
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -28,7 +28,7 @@ func ARPScan(networkInterface string) (map[string]ARPHardware, error) {
 			return nil, errors.Wrap(err, fmt.Sprintf("%#v %s", cols, b))
 		}
 
-		var hw ARPHardware
+		var hw Hardware
 		hw.IP = cols[0]
 		hw.MacAddress = cols[1]
 		hws[hw.MacAddress] = hw
