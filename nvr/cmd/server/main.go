@@ -22,6 +22,7 @@ import (
 
 	"nvr"
 	"nvr/arp"
+	"nvr/cuda"
 )
 
 var (
@@ -56,7 +57,10 @@ func StartRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	record.RTSP = append(record.RTSP, rtsp0)
 
 	count0 := Count{Src: rtsp0.Name}
-	count0.Config.Device = "cuda:0"
+	count0.Config.Device = "cpu"
+	if cuda.IsAvailable() {
+		count0.Config.Device = "cuda:0"
+	}
 	count0.Config.Mask.Enable = false
 	count0.Config.Yolo.Weights = "yolo_best.pt"
 	count0.Config.Yolo.Size = 640
@@ -166,7 +170,7 @@ func Index(s *Server, w http.ResponseWriter, r *http.Request) {
 			Link string
 		}
 		StartURL string
-		StopURL string
+		StopURL  string
 	}{}
 
 	records := s.records.all()
@@ -247,7 +251,7 @@ func (c Count) prepare() error {
 
 	// Wait for src to appear.
 	var err error
-	for i := 0; i < nvr.HLSTime*3/2; i++ {
+	for i := 0; i < nvr.HLSTime*4; i++ {
 		_, err = os.Stat(c.Config.Src)
 		if err == nil {
 			break
@@ -261,34 +265,22 @@ func (c Count) prepare() error {
 	return nil
 }
 
-func (c Count) sameIndex() (bool, error) {
-	srcN, err := fileNumLines(c.Config.Src)
+func (c Count) sameIndex() error {
+	entries, err := os.ReadDir(filepath.Dir(c.Config.Src))
 	if err != nil {
-		return false, errors.Wrap(err, "")
+		return errors.Wrap(err, "")
 	}
-	trackN, err := fileNumLines(c.Config.TrackIndex)
-	if err != nil {
-		return false, errors.Wrap(err, "")
+	trackDir := filepath.Dir(c.Config.TrackIndex)
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".ts") {
+			continue
+		}
+		trackPath := filepath.Join(trackDir, entry.Name())
+		if _, err := os.Stat(trackPath); err != nil {
+			return errors.Wrap(err, "")
+		}
 	}
-	return srcN == trackN, nil
-}
-
-func fileNumLines(fpath string) (int, error) {
-	f, err := os.Open(fpath)
-	if err != nil {
-		return -1, errors.Wrap(err, "")
-	}
-	defer f.Close()
-
-	lines := 0
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		lines++
-	}
-	if err := scanner.Err(); err != nil {
-		return -1, errors.Wrap(err, "")
-	}
-	return lines, nil
+	return nil
 }
 
 type Record struct {
@@ -463,7 +455,7 @@ func (s *Server) startRecord(record Record) (string, error) {
 	}
 
 	recordsSet := make(chan struct{})
-	go func(){
+	go func() {
 		rr := &runningRecord{record: record}
 		err := s.startRunningRecord(rr, recordsSet)
 		if err == nil {
@@ -488,33 +480,37 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 	close(recordsSet)
 
 	// Prepare RTSPs.
-	rtspFns := make([]func(context.Context), 0, len(rr.record.RTSP))
 	recordDir := rr.record.Dir(s.RecordDir)
+	rtspInit := make(chan error, len(rr.record.RTSP))
+	rtspDone := make(map[string]chan struct{}, len(rr.record.RTSP))
 	for _, rtsp := range rr.record.RTSP {
-		dir, err := rtsp.prepare(recordDir)
-		if err != nil {
-			return errors.Wrap(err, "")
-		}
-		stdouterrPath := filepath.Join(dir, stdouterrFilename)
-		stdouterrF, err := os.Create(stdouterrPath)
-		if err != nil {
-			return errors.Wrap(err, "")
-		}
-		defer stdouterrF.Close()
-		statusPath := filepath.Join(dir, statusFilename)
-		statusF, err := os.Create(statusPath)
-		if err != nil {
-			return errors.Wrap(err, "")
-		}
-		defer statusF.Close()
-		fn := nvr.RecordVideoFn(dir, rtsp.getLink, stdouterrF, stdouterrF, statusF)
-		rtspFns = append(rtspFns, fn)
-	}
-	var wg sync.WaitGroup
-	for _, fn := range rtspFns {
-		wg.Add(1)
-		go func(fn func(context.Context)) {
-			defer wg.Done()
+		done := make(chan struct{})
+		rtspDone[rtsp.Name] = done
+		go func(rtsp RTSP) {
+			defer close(done)
+
+			dir, err := rtsp.prepare(recordDir)
+			if err != nil {
+				rtspInit <- errors.Wrap(err, "")
+				return
+			}
+			stdouterrPath := filepath.Join(dir, stdouterrFilename)
+			stdouterrF, err := os.Create(stdouterrPath)
+			if err != nil {
+				rtspInit <- errors.Wrap(err, "")
+				return
+			}
+			defer stdouterrF.Close()
+			statusPath := filepath.Join(dir, statusFilename)
+			statusF, err := os.Create(statusPath)
+			if err != nil {
+				rtspInit <- errors.Wrap(err, "")
+				return
+			}
+			defer statusF.Close()
+			rtspInit <- nil
+
+			fn := nvr.RecordVideoFn(dir, rtsp.getLink, stdouterrF, stdouterrF, statusF)
 			for {
 				fn(ctx)
 				select {
@@ -523,47 +519,75 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 				default:
 				}
 			}
-		}(fn)
+		}(rtsp)
+	}
+	for i := 0; i < len(rr.record.RTSP); i++ {
+		if err := <-rtspInit; err != nil {
+			return errors.Wrap(err, "")
+		}
 	}
 
 	// Prepare counts.
-	type countFn struct{
-		count Count
-		fn func(context.Context)
-	}
-	countFns := make([]countFn, 0, len(rr.record.Count))
+	countInit := make(chan error, len(rr.record.Count))
+	countDone := make([]chan struct{}, 0, len(rr.record.Count))
 	for _, c := range rr.record.Count {
-		if err := c.prepare(); err != nil {
-			return errors.Wrap(err, "")
-		}
-		dir := filepath.Dir(c.Config.TrackIndex)
-		stdouterrPath := filepath.Join(dir, stdouterrFilename)
-		stdouterrF, err := os.Create(stdouterrPath)
-		if err != nil {
-			return errors.Wrap(err, "")
-		}
-		defer stdouterrF.Close()
-		statusPath := filepath.Join(dir, statusFilename)
-		statusF, err := os.Create(statusPath)
-		if err != nil {
-			return errors.Wrap(err, "")
-		}
-		defer statusF.Close()
-		fn := nvr.CountFn(s.Scripts.Count, c.Config, stdouterrF, stdouterrF, statusF)
-		countFns = append(countFns, countFn{count: c, fn: fn})
-	}
-	for _, cfn := range countFns {
-		wg.Add(1)
-		go func(cfn countFn) {
-			defer wg.Done()
+		srcDoneC := rtspDone[c.Src]
+		done := make(chan struct{})
+		countDone = append(countDone, done)
+		go func(c Count) {
+			defer close(done)
+
+			if err := c.prepare(); err != nil {
+				countInit <- errors.Wrap(err, "")
+				return
+			}
+			dir := filepath.Dir(c.Config.TrackIndex)
+			stdouterrPath := filepath.Join(dir, stdouterrFilename)
+			stdouterrF, err := os.Create(stdouterrPath)
+			if err != nil {
+				countInit <- errors.Wrap(err, "")
+				return
+			}
+			defer stdouterrF.Close()
+			statusPath := filepath.Join(dir, statusFilename)
+			statusF, err := os.Create(statusPath)
+			if err != nil {
+				countInit <- errors.Wrap(err, "")
+				return
+			}
+			defer statusF.Close()
+			countInit <- nil
+
+			fn := nvr.CountFn(s.Scripts.Count, c.Config, stdouterrF, stdouterrF, statusF)
+			var srcDone time.Time
 			for {
-				cfn.fn(context.Background())
-				ok, err := cfn.count.sameIndex()
-				if err == nil && ok {
+				fn(context.Background())
+
+				if srcDone.IsZero() {
+					select {
+					case <-srcDoneC:
+						srcDone = time.Now()
+					default:
+					}
+				}
+				if srcDone.IsZero() {
+					continue
+				}
+				if time.Now().Sub(srcDone) > time.Minute {
+					return
+				}
+
+				sameIndexErr := c.sameIndex()
+				if sameIndexErr == nil {
 					return
 				}
 			}
-		}(cfn)
+		}(c)
+	}
+	for i := 0; i < len(rr.record.Count); i++ {
+		if err := <-countInit; err != nil {
+			return errors.Wrap(err, "")
+		}
 	}
 
 	<-ctx.Done()
@@ -573,7 +597,9 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 		return errors.Wrap(err, "")
 	}
 
-	wg.Wait()
+	for _, done := range countDone {
+		<-done
+	}
 	rr.record.Cleanup = time.Now()
 	if err := s.writeRecord(rr.record); err != nil {
 		return errors.Wrap(err, "")

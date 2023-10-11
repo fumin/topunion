@@ -1,5 +1,5 @@
 # Example usage:
-# python count.py -c='{"TrackIndex": "server/record/20231010/20231010_060322_722691/rtsp0Track/index.m3u8", "Src": "server/record/20231010/20231010_060322_722691/rtsp0/index.m3u8", "Device": "cpu", "Mask": {"Enable": false}, "Yolo": {"Weights": "yolo_best.pt", "Size": 640}, "Track": {"PrevCount": 10000}}'
+# python count.py -c='{"TrackIndex": "track/index.m3u8", "Src": "server/record/20060102/20060102_150405_000000/rtsp0/index.m3u8", "Device": "cpu", "Mask": {"Enable": false}, "Yolo": {"Weights": "yolo_best.pt", "Size": 640}, "Track": {"PrevCount": 10000}}'
 
 import argparse
 import datetime
@@ -9,6 +9,7 @@ import logging
 import os
 import select
 import sys
+import threading
 import time
 
 import numpy as np
@@ -441,63 +442,126 @@ def getImgSize(indexPath):
     return h, w, None
 
 
+class Frame:
+    def __init__(self, img, time_base, pts, dts):
+        self.img = img
+        self.time_base = time_base
+        self.pts = pts
+        self.dts = dts
+
+
+def writeVideo(fpath, rate, time_base, pts, dts, height, width, frames):
+    options = {
+        # "movflags": "frag_keyframe",
+        # "muxdelay": "10",
+        # "muxpreload": "10",
+        # "output_ts_offset": "10",
+    }
+    mux = av.open(fpath, mode="w", format="mp4", options=options)
+    stream = mux.add_stream("h264", rate=rate)
+    # stream = mux.add_stream("h264")
+    stream.codec_context.flags |= "GLOBAL_HEADER"
+    stream.time_base = time_base
+    stream.codec_context.time_base = time_base
+    stream.height = height
+    stream.width = width
+
+    prevPTS = -1
+    for frm in frames:
+        frame = av.VideoFrame.from_ndarray(frm.img, format="rgb24")
+        frame.time_base = frm.time_base
+        frame.pts = frm.pts
+        # frame.pts = int(frm.pts * frm.time_base)
+        if frame.pts <= prevPTS:
+            frame.pts = prevPTS + 1
+        prevPTS = frame.pts
+        if os.path.basename(fpath) == "1697046462_4200000.ts":
+            logging.info("frame %s %s %s", os.path.basename(fpath), frame.pts, frame.time_base)
+        for packet in stream.encode(frame):
+            if os.path.basename(fpath) == "1697046462_4200000.ts":
+                stream = mux.streams.video[0]
+                logging.info("packet %s %s %s %s %s %s %s %s", os.path.basename(fpath), packet.pts, packet.dts, packet.time_base, packet.duration, stream.codec_context.time_base, stream.time_base, av.time_base)
+            # if packet.pts is not None:
+            #     packet.pts += pts
+            # if packet.dts is not None:
+            #     packet.dts += dts
+            mux.mux(packet)
+            if os.path.basename(fpath) == "1697046462_4200000.ts":
+                stream = mux.streams.video[0]
+                logging.info("packet after %s %s %s %s %s %s %s %s", os.path.basename(fpath), packet.pts, packet.dts, packet.time_base, packet.duration, stream.codec_context.time_base, stream.time_base, av.time_base)
+
+    for packet in stream.encode():
+        # if packet.pts is not None:
+        #     packet.pts += pts
+        # if packet.dts is not None:
+        #     packet.dts += dts
+        # logging.info("%s %s %s %s %s", fpath, pts, dts, packet.pts, packet.dts)
+        mux.mux(packet)
+    mux.close()
+
+
 def handleVideo(trackVidPath, srcVid, handler):
     rMux = av.open(srcVid)
+    rMux.streams.video[0].thread_type = "AUTO"
     rStream = rMux.streams.video[0]
 
-    if trackVidPath != "":
-        options = {"movflags":"empty_moov+frag_keyframe"}
-        trackMux = av.open(trackVidPath, mode="w", format="mp4", options=options)
-        trackStream = trackMux.add_stream("h264", rate=rStream.average_rate)
-        trackStream.width = rStream.width
-        trackStream.height = rStream.height
+    rate = rStream.average_rate
+    time_base = rStream.time_base
+    pts = 0
+    dts = 0
+    height = rStream.height
+    width = rStream.width
+    imgs = []
 
+    ptsSet = False
     for frame in rMux.decode(rStream):
         ts = [{"t": time.perf_counter()}]
 
+        if not ptsSet:
+            ptsSet = True
+            pts = frame.pts
+            dts = frame.dts
         img = frame.to_rgb().to_ndarray()
         out = handler.h(img, ts)
 
-        if trackVidPath != "":
-            trackFrame = av.VideoFrame.from_ndarray(out.track, format="rgb24")
-            for packet in trackStream.encode(trackFrame):
-                trackMux.mux(packet)
-
-    if trackVidPath != "":
-        for packet in trackStream.encode():
-            trackMux.mux(packet)
-        trackMux.close()
+        imgs.append(Frame(out.track, frame.time_base, frame.pts, frame.dts))
 
     rMux.close()
+
+    writeFn = lambda: None
+    if trackVidPath != "":
+        writeFn = lambda: writeVideo(trackVidPath, rate, time_base, pts, dts, height, width, imgs)
+    return writeFn
 
 
 def process(differ, handler):
     newLines, err = differ.refresh()
     if err:
-        return -1, False, err
+        return None, -1, False, err
     logging.info("newLines %s", newLines)
     if len(newLines) == 0:
-        return 5, False, None
+        return None, 5, False, None
     last = newLines[len(newLines)-1]
 
     isEOF = False
     if last.tag == "EXT-X-ENDLIST" or last.tag == "EXT-X-DISCONTINUITY":
         isEOF = True
+    writeFn = lambda: None
     if last.tag == "":
         sgm = last.b
         srcDir = os.path.dirname(differ.srcIndexPath)
         trackDir = os.path.dirname(differ.trackIndexPath)
         srcVidPath = os.path.join(srcDir, sgm)
         trackVidPath = os.path.join(trackDir, sgm)
-        handleVideo(trackVidPath, srcVidPath, handler)
+        writeFn = handleVideo(trackVidPath, srcVidPath, handler)
 
     for l in newLines:
         differ.trackIndex.append(l)
     err = differ.save()
     if err:
-        return -1, False, err
+        return None, -1, False, err
 
-    return 0, isEOF, None
+    return writeFn, 0, isEOF, None
 
 
 def main():
@@ -536,8 +600,12 @@ def mainWithErr(args):
     if HAS_AI:
         handler.tracker.warmup = len(tracker.ids)
 
+    threads = []
     while True:
-        waitSecs, isEOF, err = process(differ, handler)
+        writeFn, waitSecs, isEOF, err = process(differ, handler)
+        thrd = threading.Thread(target=writeFn)
+        thrd.start()
+        threads.append(thrd)
         if err:
             return err
         if isEOF:
@@ -546,6 +614,9 @@ def mainWithErr(args):
         stdin = readline(waitSecs)
         if len(stdin) > 0:
             break
+
+    for t in threads:
+        t.join()
 
     return None
 
