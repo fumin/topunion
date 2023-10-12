@@ -5,6 +5,7 @@
 <body>
 
 <div id="info">
+
 <div id="start-section">
 	<button id="start-btn">Start</button>
 </div>
@@ -12,6 +13,23 @@
 	<button id="stop-btn">Stop</button>
 	<a href="{{.CurrentRecord.Link}}">{{.CurrentRecord.ID}}</a>
 </div>
+
+<table>
+	<thead><tr>
+		<th>ID</th>
+		<th>Start</th>
+		<th>Stop</th>
+	</tr></thead>
+	<tbody>
+	{{range .LatestRecords}}
+		<tr>
+			<td><a href="{{.Link}}">{{.ID}}</a></td>
+			<td>{{.CreateTime}}</td>
+			<td>{{.StopTime}}</td>
+		</tr>
+	{{end}}
+	</tbody>
+</table>
 
 <script>
 let page = {{.}};

@@ -1,5 +1,5 @@
 # Example usage:
-# python count.py -c='{"TrackIndex": "track/index.m3u8", "Src": "server/record/20060102/20060102_150405_000000/rtsp0/index.m3u8", "Device": "cpu", "Mask": {"Enable": false}, "Yolo": {"Weights": "yolo_best.pt", "Size": 640}, "Track": {"PrevCount": 10000}}'
+# python count.py -c='{"TrackIndex": "track/index.m3u8", "TrackDir": "track/track", "Src": "server/record/2006/20060102/20060102_150405_000000/rtsp0/index.m3u8", "Device": "cpu", "Mask": {"Enable": false}, "Yolo": {"Weights": "yolo_best.pt", "Size": 640}, "Track": {"PrevCount": 10000}}'
 
 import argparse
 import datetime
@@ -12,6 +12,7 @@ import select
 import sys
 import threading
 import time
+from typing import Any
 
 import numpy as np
 import torch
@@ -315,7 +316,7 @@ class M3U8Line:
         return f"M3U8Line{{tag: {self.tag}, b: {self.b}}}"
 
 
-def newM3U8Line(line):
+def newM3U8Line(line: str) -> M3U8Line:
     m = M3U8Line()
     m.b = line
     if not line.startswith("#"):
@@ -329,7 +330,7 @@ def newM3U8Line(line):
     return m
 
 
-def readIndex(fpath):
+def readIndex(fpath: str) -> tuple[list[M3U8Line], Any]:
     with open(fpath) as f:
         b = f.read()
     lines = b.split("\n")
@@ -347,16 +348,16 @@ def readIndex(fpath):
 
 
 class Differ:
-    def __init__(self, trackIndexPath, srcIndexPath):
+    def __init__(self, trackIndexPath: str, srcIndexPath: str):
         self.trackIndexPath = trackIndexPath
         self.srcIndexPath = srcIndexPath
 
-        self.trackIndex = None
+        self.trackIndex: list[M3U8Line] = []
 
     def __repr__(self):
         return f"Differ{{{self.trackIndexPath} {self.srcIndexPath} {self.trackIndex}}}"
 
-    def getWarmup(self):
+    def getWarmup(self) -> tuple[str, Any]:
         trackIndex, err = self._load()
 
         # Loop backwards and find the first previous segment.
@@ -393,7 +394,7 @@ class Differ:
 
         return urlStr, None
 
-    def refresh(self):
+    def refresh(self) -> tuple[list[M3U8Line], Any]:
         srcIndex, err = readIndex(self.srcIndexPath)
         if err:
             return None, err
@@ -425,7 +426,7 @@ class Differ:
         newLines = srcIndex[len(self.trackIndex) : (nextSegmentIdx+1)]
         return newLines, None
 
-    def _load(self):
+    def _load(self) -> tuple[list[M3U8Line], Any]:
         trackIndex = []
         if os.path.isfile(self.trackIndexPath):
             trackIndex, err = readIndex(self.trackIndexPath)
@@ -453,13 +454,13 @@ class Differ:
         return trackIndex, None
 
 
-def saveIndex(fpath, index):
+def saveIndex(fpath: str, index: list[M3U8Line]):
     b = "\n".join([m.b for m in index])
     with open(fpath, "w") as f:
         f.write(b)
 
 
-def getImgSize(indexPath):
+def getImgSize(indexPath: str) -> tuple[int, int, Any]:
     # Find an example video file.
     dir = os.path.dirname(indexPath)
     entries = os.listdir(dir)
@@ -488,70 +489,38 @@ class Frame:
 
 class VideoInfo:
     def __init__(self):
-        self.fpath = ""
-        self.rate = -1
-        self.time_base = -1
-        self.pts = -1
-        self.dts = -1
-        self.height = -1
-        self.width = -1
-        self.frames = []
+        self.fpath: str = ""
+        self.rate: Any = -1
+        self.bit_rate: int = -1
+        self.height: int = -1
+        self.width: int = -1
+        self.frames: list[Frame] = []
+        self.outs: list[Any] = []
 
     def __repr__(self):
         return f"VideoInfo {self.fpath} {len(self.frames)}"
 
 
-def writeVideo(info):
-    options = {
-        # "movflags": "frag_keyframe",
-        # "muxdelay": "10",
-        # "muxpreload": "10",
-        # "output_ts_offset": "10",
-    }
-    mux = av.open(info.fpath, mode="w", format="mp4", options=options)
+def writeVideo(info: VideoInfo):
+    mux = av.open(info.fpath, mode="w", format="mpegts")
     stream = mux.add_stream("h264", rate=info.rate)
-    # stream = mux.add_stream("h264")
-    stream.codec_context.flags |= "GLOBAL_HEADER"
-    stream.time_base = info.time_base
-    stream.codec_context.time_base = info.time_base
+    stream.bit_rate = int(info.bit_rate)
     stream.height = info.height
     stream.width = info.width
 
-    prevPTS = -1
     for frm in info.frames:
         frame = av.VideoFrame.from_ndarray(frm.img, format="rgb24")
         frame.time_base = frm.time_base
         frame.pts = frm.pts
-        # frame.pts = int(frm.pts * frm.time_base)
-        if frame.pts <= prevPTS:
-            frame.pts = prevPTS + 1
-        prevPTS = frame.pts
-        if os.path.basename(info.fpath) == "1697046462_4200000.ts":
-            logging.info("frame %s %s %s", os.path.basename(fpath), frame.pts, frame.time_base)
         for packet in stream.encode(frame):
-            if os.path.basename(info.fpath) == "1697046462_4200000.ts":
-                stream = mux.streams.video[0]
-                logging.info("packet %s %s %s %s %s %s %s %s", os.path.basename(info.fpath), packet.pts, packet.dts, packet.time_base, packet.duration, stream.codec_context.time_base, stream.time_base, av.time_base)
-            # if packet.pts is not None:
-            #     packet.pts += pts
-            # if packet.dts is not None:
-            #     packet.dts += dts
             mux.mux(packet)
-            if os.path.basename(info.fpath) == "1697046462_4200000.ts":
-                stream = mux.streams.video[0]
-                logging.info("packet after %s %s %s %s %s %s %s %s", os.path.basename(info.fpath), packet.pts, packet.dts, packet.time_base, packet.duration, stream.codec_context.time_base, stream.time_base, av.time_base)
 
     for packet in stream.encode():
-        # if packet.pts is not None:
-        #     packet.pts += pts
-        # if packet.dts is not None:
-        #     packet.dts += dts
-        # logging.info("%s %s %s %s %s", fpath, pts, dts, packet.pts, packet.dts)
         mux.mux(packet)
     mux.close()
 
 
-def handleVideo(trackVidPath, srcVid, handler):
+def handleVideo(trackVidPath: str, srcVid: str, handler: Any) -> VideoInfo:
     rMux = av.open(srcVid)
     rMux.streams.video[0].thread_type = "AUTO"
     rStream = rMux.streams.video[0]
@@ -559,33 +528,39 @@ def handleVideo(trackVidPath, srcVid, handler):
     info = VideoInfo()
     info.fpath = trackVidPath
     info.rate = rStream.average_rate
-    info.time_base = rStream.time_base
     info.height = rStream.height
     info.width = rStream.width
 
-    ptsSet = False
-    for frame in rMux.decode(rStream):
-        ts = [{"t": time.perf_counter()}]
+    bits = 0
+    secs = 0
 
-        if not ptsSet:
-            ptsSet = True
-            info.pts = frame.pts
-            info.dts = frame.dts
-        img = frame.to_rgb().to_ndarray()
-        out = handler.h(img, ts)
+    for packet in rMux.demux(rStream):
+        bits += packet.size * 8
+        secs += packet.duration * packet.time_base
+        for frame in packet.decode():
+            ts = [{"t": time.perf_counter()}]
 
-        info.frames.append(Frame(out.track, frame.time_base, frame.pts, frame.dts))
+            img = frame.to_rgb().to_ndarray()
+            out = handler.h(img, ts)
+
+            info.frames.append(Frame(out.track, frame.time_base, frame.pts, frame.dts))
+            info.outs.append(out)
 
     rMux.close()
+
+    info.bit_rate = bits / secs
     return info
 
 
 class ProcessInfo:
     def __init__(self):
-        self.indexPath = ""
-        self.indexCurrent = []
-        self.indexNew = []
-        self.video = None
+        self.indexPath: str = ""
+        self.indexCurrent: list[M3U8List] = []
+        self.indexNew: list[M3U8List] = []
+        self.video: VideoInfo = None
+
+        self.trackPath: str = ""
+        self.track: Any = None
 
     def __repr__(self):
         return f"ProcessInfo {self.indexPath} {len(self.indexCurrent)} {len(self.indexNew)} {self.video}"
@@ -604,12 +579,42 @@ class ProcessInfo:
         return 0
 
 
-def runBackground(threads, info):
+class ThreadQueue:
+    def __init__(self, thread: threading.Thread, qu: queue.Queue):
+        self.thread = thread
+        self.queue = qu
+
+        self.mutex = threading.Lock()
+        self.gotOK = False
+        self.ok = False
+
+    def wait(self):
+        with self.mutex:
+            if self.gotOK:
+                return self.ok
+
+            self.thread.join()
+            try:
+                self.ok = self.queue.get(block=False)
+            except queue.Empty as e:
+                self.ok = False
+            self.gotOK = True
+            return self.ok
+
+    def is_alive(self):
+        return self.thread.is_alive()
+
+
+def runBackground(qu: queue.Queue, threads: list[ThreadQueue], info: ProcessInfo):
     if info.video:
         writeVideo(info.video)
+    if info.trackPath != "":
+        with open(info.trackPath, "w") as f:
+            f.write(json.dumps(info.track))
 
     for t in threads:
-        t.join()
+        if not t.wait():
+            return
 
     logging.info("newlines %s, video %s, threads %d", info.indexNew, info.video, len(threads))
     index = info.indexCurrent
@@ -617,8 +622,10 @@ def runBackground(threads, info):
         index.append(l)
     saveIndex(info.indexPath, index)
 
+    qu.put(True)
 
-def process(differ, handler):
+
+def process(differ: Differ, trackDir: str, handler: Any) -> tuple[ProcessInfo, Any]:
     newLines, err = differ.refresh()
     if err:
         return None, err
@@ -636,10 +643,18 @@ def process(differ, handler):
         if last.tag == "":
             sgm = last.b
             srcDir = os.path.dirname(differ.srcIndexPath)
-            trackDir = os.path.dirname(differ.trackIndexPath)
+            trackIndexDir = os.path.dirname(differ.trackIndexPath)
             srcVidPath = os.path.join(srcDir, sgm)
-            trackVidPath = os.path.join(trackDir, sgm)
+            trackVidPath = os.path.join(trackIndexDir, sgm)
             info.video = handleVideo(trackVidPath, srcVidPath, handler)
+
+            base = os.path.basename(srcVidPath)
+            noext, _ = os.path.splitext(base)
+            info.trackPath = os.path.join(trackDir, noext+".json")
+            info.track = {}
+            if len(info.video.outs) > 0:
+                lastOut = info.video.outs[len(info.video.outs)-1]
+                info.track = {"Count": lastOut.numCounted}
 
     return info, None
 
@@ -679,18 +694,27 @@ def mainWithErr(args):
         handleVideo("", warmup, handler)
         handler.afterWarmup()
 
+    firstVideo = True
     stdinR = newStdinReader()
     threads = []
     while True:
-        info, err = process(differ, handler)
+        info, err = process(differ, cfg["TrackDir"], handler)
         if err:
             return err
 
-        stillRunning = list(filter(lambda t: t.is_alive(), threads))
-        thrd = threading.Thread(target=runBackground, args=(stillRunning, info))
-        thrd.start()
-        threads = [t for t in stillRunning]
-        threads.append(thrd)
+        # For the first video, do things synchronously, so that we get a video as soon as possible.
+        # If not, we may spawn too many threads, leading to slow generation of the first video.
+        if firstVideo:
+            firstVideo = False
+            qu = queue.Queue(maxsize=1)
+            runBackground(qu, [], info)
+        else:
+            qu = queue.Queue(maxsize=1)
+            stillRunning = list(filter(lambda t: t.is_alive(), threads))
+            thrd = threading.Thread(target=runBackground, args=(qu, stillRunning, info))
+            thrd.start()
+            threads = [t for t in stillRunning]
+            threads.append(ThreadQueue(thrd, qu))
 
         if info.isEOF():
             break
@@ -700,7 +724,7 @@ def mainWithErr(args):
             break
 
     for t in threads:
-        t.join()
+        t.wait()
 
     return None
 

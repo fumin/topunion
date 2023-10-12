@@ -9,9 +9,9 @@
 	{{range .RTSP}}
 	<div>
 		<h3>{{.Name}}</h3>
-		<div>link: {{.Link}}</div>
-		<div>network interface: {{.NetworkInterface}}</div>
-		<div>mac address: {{.MacAddress}}</div>
+		<div>Link: {{.Link}}</div>
+		<div>Network interface: {{.NetworkInterface}}</div>
+		<div>Mac address: {{.MacAddress}}</div>
 		<a href="{{.Video}}">Video</a>
 	</div>
 	{{end}}
@@ -21,7 +21,8 @@
 	{{range .Count}}
 	<div>
 		<h3>{{.Src}}</h3>
-		<div>config: {{.Config}}</div>
+		<div>Config: {{.Config}}</div>
+		<div>Track: {{.Track}}</div>
 		<a href="{{.TrackVideo}}">Track video</a>
 	</div>
 	{{end}}
