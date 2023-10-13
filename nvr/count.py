@@ -659,8 +659,7 @@ def runBackground(qu: queue.Queue, threads: list[ThreadQueue], info: ProcessInfo
         if not t.wait():
             return
 
-    # logging.info("newlines %s, video %s, threads %d", info.indexNew, info.video, len(threads))
-    logging.info(_l("newlines", newlines=info.indexNew, video=(info.video and info.video.fpath), threads=len(threads)))
+    logging.info(_l("newlines", Newlines=[vars(o) for o in info.indexNew], Video=(info.video and info.video.fpath), Threads=len(threads)))
     index = info.indexCurrent
     for l in info.indexNew:
         index.append(l)
@@ -702,15 +701,14 @@ def process(differ: Differ, trackDir: str, handler: Any) -> tuple[ProcessInfo, A
 class StructuredMessage:
     def __init__(self, event, /, **kwargs):
         stack = inspect.stack()
-        self.pathname = stack[1][1]
-        self.lineno = stack[1][2]
+        self.longfile = stack[1][1] + ":" + str(stack[1][2])
         self.event = event
         self.kwargs = kwargs
 
     def __str__(self):
-        self.kwargs["Pathname"] = self.pathname
-
-        self.kwargs["Event"] = self.event
+        self.kwargs["Ltime"] = datetime.datetime.utcnow().isoformat()+"Z"
+        self.kwargs["Llongfile"] = self.longfile
+        self.kwargs["Levent"] = self.event
         return json.dumps(self.kwargs)
 
 _l = StructuredMessage
@@ -718,9 +716,6 @@ _l = StructuredMessage
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    # lg = logging.getLogger()
-    # lg.setLevel(logging.INFO)
-    # lg.handlers[0].setFormatter(logging.Formatter("%(asctime)s.%(msecs)03d %(pathname)s:%(lineno)d %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-c")
@@ -733,7 +728,7 @@ def main():
 
 def mainWithErr(args):
     logging.info("%s", args.c)
-    logging.info(_l("config", v=json.dumps(args.c)))
+    logging.info(_l("config", V=json.dumps(args.c)))
     cfg = json.loads(args.c)
 
     differ = Differ(cfg["TrackIndex"], cfg["Src"])
@@ -747,13 +742,11 @@ def mainWithErr(args):
     lastHandleRes = ""
     if lastRes != "":
         lastHandleRes = os.path.join(cfg["TrackDir"], lastRes+".json")
-    # logging.info("lastHandleRes \"%s\"", lastHandleRes)
-    logging.info(_l("lastResult", v=lastHandleRes))
+    logging.info(_l("lastResult", V=lastHandleRes))
     handler = Handler(cfg["AI"], height, width, lastHandleRes)
 
     # Warmup the tracker, so that it does not count objects in the first frame as new objects.
-    # logging.info("warmup \"%s\"", warmup)
-    logging.info(_l("warmup", v=warmup))
+    logging.info(_l("warmup", V=warmup))
     if warmup != "":
         handleVideo("", warmup, handler)
         handler.afterWarmup()
