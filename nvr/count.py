@@ -1,5 +1,5 @@
 # Example usage:
-# python count.py -c='{"TrackIndex": "track/index.m3u8", "TrackDir": "track/track", "Src": "server/record/2006/20060102/20060102_150405_000000/rtsp0/index.m3u8", "Device": "cpu", "Mask": {"Enable": false}, "Yolo": {"Weights": "yolo_best.pt", "Size": 640}, "Track": {}}'
+# python count.py -c='{"TrackIndex": "track/index.m3u8", "TrackDir": "track/track", "Src": "server/record/2006/20060102/20060102_150405_000000/rtsp0/index.m3u8", "AI": {"Smart": false, "Device": "cpu", "Mask": {"Enable": false}, "Yolo": {"Weights": "yolo_best.pt", "Size": 640}, "Track": {}}}'
 
 import argparse
 import datetime
@@ -21,16 +21,6 @@ import torchvision
 import cv2
 import av
 
-HAS_AI = False
-if HAS_AI:
-    from detectron2.structures import Boxes, Instances
-    
-    import ultralytics
-    
-    # BYTETracker needs this numpy fix...
-    np.float = float
-    from yolox.tracker.byte_tracker import BYTETracker
-
 
 class HandleResult:
     def __init__(self, count, track: npt.NDArray[np.uint8]):
@@ -50,6 +40,7 @@ def readHandleResult(fpath):
 
 class Handler:
     def __init__(self, cfg, height, width, lastResultPath):
+        self.cfg = cfg
         dtype = np.uint8
         masker = Masker(cfg["Mask"], height, width, dtype, cfg["Device"])
         numChannels = 3
@@ -58,13 +49,21 @@ class Handler:
 
         detector = None
         tracker = None
-        if HAS_AI:
+        if cfg["Smart"]:
+            from detectron2.structures import Boxes, Instances
+            
+            import ultralytics
+            
+            # BYTETracker needs this numpy fix...
+            np.float = float
+            from yolox.tracker.byte_tracker import BYTETracker
+
             detector = newYolov8(cfg["Yolo"]["Weights"], cfg["Yolo"]["Size"], [[masked.shape[0], masked.shape[1]]])
             tracker = newTracker(cfg["Track"])
 
         if lastResultPath != "":
             lastRes = readHandleResult(lastResultPath)
-            if HAS_AI:
+            if cfg["Smart"]:
                 self.tracker.prevCount = lastRes.count
 
         self.config = cfg
@@ -73,7 +72,7 @@ class Handler:
         self.tracker = tracker
 
     def afterWarmup(self):
-        if HAS_AI:
+        if self.cfg["Smart"]:
             self.tracker.warmup = len(self.tracker.ids)
 
     def h(self, img: npt.NDArray[np.uint8], ts: list[Any]) -> HandleResult:
@@ -83,7 +82,7 @@ class Handler:
 
         numCounted = 0
         trackPredImg = masked[0].cpu().numpy()
-        if HAS_AI:
+        if self.cfg["Smart"]:
             outputs_batch = self.detector.predict(self.detector, masked, ts)
             ts.append({"name": "predict", "t": time.perf_counter()})
 
@@ -660,7 +659,8 @@ def runBackground(qu: queue.Queue, threads: list[ThreadQueue], info: ProcessInfo
         if not t.wait():
             return
 
-    logging.info("newlines %s, video %s, threads %d", info.indexNew, info.video, len(threads))
+    # logging.info("newlines %s, video %s, threads %d", info.indexNew, info.video, len(threads))
+    logging.info(_l("newlines", newlines=info.indexNew, video=(info.video and info.video.fpath), threads=len(threads)))
     index = info.indexCurrent
     for l in info.indexNew:
         index.append(l)
@@ -699,11 +699,28 @@ def process(differ: Differ, trackDir: str, handler: Any) -> tuple[ProcessInfo, A
     return info, None
 
 
+class StructuredMessage:
+    def __init__(self, event, /, **kwargs):
+        stack = inspect.stack()
+        self.pathname = stack[1][1]
+        self.lineno = stack[1][2]
+        self.event = event
+        self.kwargs = kwargs
+
+    def __str__(self):
+        self.kwargs["Pathname"] = self.pathname
+
+        self.kwargs["Event"] = self.event
+        return json.dumps(self.kwargs)
+
+_l = StructuredMessage
+
+
 def main():
-    logging.basicConfig()
-    lg = logging.getLogger()
-    lg.setLevel(logging.INFO)
-    lg.handlers[0].setFormatter(logging.Formatter("%(asctime)s.%(msecs)03d %(pathname)s:%(lineno)d %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    # lg = logging.getLogger()
+    # lg.setLevel(logging.INFO)
+    # lg.handlers[0].setFormatter(logging.Formatter("%(asctime)s.%(msecs)03d %(pathname)s:%(lineno)d %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-c")
@@ -716,6 +733,7 @@ def main():
 
 def mainWithErr(args):
     logging.info("%s", args.c)
+    logging.info(_l("config", v=json.dumps(args.c)))
     cfg = json.loads(args.c)
 
     differ = Differ(cfg["TrackIndex"], cfg["Src"])
@@ -729,11 +747,13 @@ def mainWithErr(args):
     lastHandleRes = ""
     if lastRes != "":
         lastHandleRes = os.path.join(cfg["TrackDir"], lastRes+".json")
-    logging.info("lastHandleRes \"%s\"", lastHandleRes)
-    handler = Handler(cfg, height, width, lastHandleRes)
+    # logging.info("lastHandleRes \"%s\"", lastHandleRes)
+    logging.info(_l("lastResult", v=lastHandleRes))
+    handler = Handler(cfg["AI"], height, width, lastHandleRes)
 
     # Warmup the tracker, so that it does not count objects in the first frame as new objects.
-    logging.info("warmup \"%s\"", warmup)
+    # logging.info("warmup \"%s\"", warmup)
+    logging.info(_l("warmup", v=warmup))
     if warmup != "":
         handleVideo("", warmup, handler)
         handler.afterWarmup()

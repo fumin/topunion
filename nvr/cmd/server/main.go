@@ -55,13 +55,14 @@ func StartRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	record.RTSP = append(record.RTSP, rtsp0)
 
 	count0 := nvr.Count{Src: rtsp0.Name}
-	count0.Config.Device = "cpu"
+	count0.Config.AI.Smart = false
+	count0.Config.AI.Device = "cpu"
 	if cuda.IsAvailable() {
-		count0.Config.Device = "cuda:0"
+		count0.Config.AI.Device = "cuda:0"
 	}
-	count0.Config.Mask.Enable = false
-	count0.Config.Yolo.Weights = "yolo_best.pt"
-	count0.Config.Yolo.Size = 640
+	count0.Config.AI.Mask.Enable = false
+	count0.Config.AI.Yolo.Weights = "yolo_best.pt"
+	count0.Config.AI.Yolo.Size = 640
 	record.Count = append(record.Count, count0)
 
 	id, err := s.startRecord(record)

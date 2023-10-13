@@ -48,25 +48,28 @@ type CountConfig struct {
 	TrackIndex string
 	TrackDir   string
 	Src        string
-	Device     string
-	Mask       struct {
-		Enable bool
-		Crop   struct {
-			X int
-			Y int
-			W int
+	AI struct{
+		Smart bool
+		Device     string
+		Mask       struct {
+			Enable bool
+			Crop   struct {
+				X int
+				Y int
+				W int
+			}
+			Mask struct {
+				Slope float64
+				Y     int
+				H     int
+			}
 		}
-		Mask struct {
-			Slope float64
-			Y     int
-			H     int
+		Yolo struct {
+			Weights string
+			Size    int
 		}
-	}
-	Yolo struct {
-		Weights string
-		Size    int
-	}
-	Track struct {
+		Track struct {
+		}
 	}
 }
 
