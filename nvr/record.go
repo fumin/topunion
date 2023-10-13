@@ -1,11 +1,11 @@
 package nvr
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -93,19 +93,16 @@ func (c Count) Prepare() error {
 }
 
 func (c Count) SameIndex() error {
-	entries, err := os.ReadDir(filepath.Dir(c.Config.Src))
+	src, err := os.ReadFile(c.Config.Src)
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
-	trackDir := filepath.Dir(c.Config.TrackIndex)
-	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), ".ts") {
-			continue
-		}
-		trackPath := filepath.Join(trackDir, entry.Name())
-		if _, err := os.Stat(trackPath); err != nil {
-			return errors.Wrap(err, "")
-		}
+	track, err := os.ReadFile(c.Config.TrackIndex)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	if !bytes.Equal(src, track) {
+		return errors.Errorf("not equal")
 	}
 	return nil
 }

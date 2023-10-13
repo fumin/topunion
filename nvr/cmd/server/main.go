@@ -374,6 +374,9 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 				rtspInit <- errors.Wrap(err, "")
 				return
 			}
+			// Files must be in the same function scope as the loop.
+			// This is to make sure that closing of files are always after the looping is done.
+			// This prevents the loop from writing to closed files.
 			stdouterrPath := filepath.Join(dir, stdouterrFilename)
 			stdouterrF, err := os.Create(stdouterrPath)
 			if err != nil {
@@ -421,6 +424,9 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 				countInit <- errors.Wrap(err, "")
 				return
 			}
+			// Files must be in the same function scope as the loop.
+			// This is to make sure that closing of files are always after the looping is done.
+			// This prevents the loop from writing to closed files.
 			dir := filepath.Dir(c.Config.TrackIndex)
 			stdouterrPath := filepath.Join(dir, stdouterrFilename)
 			stdouterrF, err := os.Create(stdouterrPath)
@@ -439,28 +445,16 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 			countInit <- nil
 
 			fn := nvr.CountFn(s.Scripts.Count, c.Config, stdouterrF, stdouterrF, statusF)
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			var srcDone time.Time
+			delayedCtx := nvr.WithDelay(srcDoneC, 5*time.Minute)
 			for {
-				fn(ctx)
-
-				if srcDone.IsZero() {
-					select {
-					case <-srcDoneC:
-						srcDone = time.Now()
-					default:
-					}
-				}
-				if srcDone.IsZero() {
-					continue
-				}
-				// Stop if src has finished for a while.
-				if time.Now().Sub(srcDone) > 5*time.Minute {
+				fn(delayedCtx)
+				select {
+				case <-delayedCtx.Done():
 					return
+				default:
 				}
 
-				// Stop if we are finished processing.
+				// Stop if we have finished processing.
 				sameIndexErr := c.SameIndex()
 				if sameIndexErr == nil {
 					return

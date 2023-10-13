@@ -41,6 +41,16 @@ func TimeParse(name string) (time.Time, error) {
 	return parsed, nil
 }
 
+func WithDelay(parent <-chan struct{}, duration time.Duration) context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		defer cancel()
+		<-parent
+		<-time.After(duration)
+	}()
+	return ctx
+}
+
 func newCmdFn(w io.Writer, fn func(context.Context) (*exec.Cmd, error)) func(context.Context) {
 	run := func(ctx context.Context) {
 		cmd, err := fn(ctx)
