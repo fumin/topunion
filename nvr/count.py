@@ -553,8 +553,18 @@ def writeVideo(info: VideoInfo):
 
 
 def writeVideoFFMPEG(info: VideoInfo):
-    noext, _ = os.path.splitext(os.path.basename(info.fpath))
-    imgDir = os.path.join(os.path.dirname(info.fpath), "img", noext)
+    recordDir = os.path.dirname(info.fpath)
+
+    # User tmpfs
+    # mkdir /home/topunion/mytmpfs
+    # sudo mount -t tmpfs none /home/topunion/mytmpfs
+    # df -T /home/topunion/mytmpfs/
+    recordName = os.path.basename(os.path.dirname(os.path.dirname(info.fpath)))
+    streamName = os.path.basename(os.path.dirname(info.fpath))
+    recordDir = os.path.join("/home/topunion/mytmpfs", recordName, streamName)
+
+    segment, _ = os.path.splitext(os.path.basename(info.fpath))
+    imgDir = os.path.join(recordDir, "img", segment)
     os.makedirs(imgDir, exist_ok=True)
 
     for i, frm in enumerate(info.frames):
@@ -580,6 +590,8 @@ def writeVideoFFMPEG(info: VideoInfo):
     logging.info(_l("cmd", V=" ".join(cmd)))
     result = subprocess.run(cmd, capture_output=True, text=True)
     # logging.info("%s", result.stderr)
+
+    subprocess.run(["rm", "-r", imgDir])
 
 
 def writeVideoPyAV(info: VideoInfo):

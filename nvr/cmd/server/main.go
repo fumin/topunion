@@ -75,10 +75,10 @@ func StartRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
-	go func() {
-		<-time.After((1*60 + 3) * time.Second)
-		s.stopRecord(id)
-	}()
+	// go func() {
+	// 	<-time.After((1*60 + 3) * time.Second)
+	// 	s.stopRecord(id)
+	// }()
 
 	resp := struct{ ID string }{ID: id}
 	return resp, nil
