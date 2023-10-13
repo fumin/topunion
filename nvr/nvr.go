@@ -67,12 +67,11 @@ type CountConfig struct {
 		Size    int
 	}
 	Track struct {
-		PrevCount int
 	}
 }
 
 func CountFn(script string, cfg CountConfig, stdout, stderr, statusW io.Writer) func(context.Context) {
-	const program = "python3"
+	const program = "python"
 	run := func(ctx context.Context) (*exec.Cmd, error) {
 		c, err := json.Marshal(cfg)
 		if err != nil {

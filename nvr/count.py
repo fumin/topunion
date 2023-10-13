@@ -1,5 +1,5 @@
 # Example usage:
-# python count.py -c='{"TrackIndex": "track/index.m3u8", "TrackDir": "track/track", "Src": "server/record/2006/20060102/20060102_150405_000000/rtsp0/index.m3u8", "Device": "cpu", "Mask": {"Enable": false}, "Yolo": {"Weights": "yolo_best.pt", "Size": 640}, "Track": {"PrevCount": 10000}}'
+# python count.py -c='{"TrackIndex": "track/index.m3u8", "TrackDir": "track/track", "Src": "server/record/2006/20060102/20060102_150405_000000/rtsp0/index.m3u8", "Device": "cpu", "Mask": {"Enable": false}, "Yolo": {"Weights": "yolo_best.pt", "Size": 640}, "Track": {}}'
 
 import argparse
 import datetime
@@ -15,6 +15,7 @@ import time
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import torch
 import torchvision
 import cv2
@@ -31,8 +32,24 @@ if HAS_AI:
     from yolox.tracker.byte_tracker import BYTETracker
 
 
+class HandleResult:
+    def __init__(self, count, track: npt.NDArray[np.uint8]):
+        self.count = count
+        self.track = track
+    def json(self):
+        d = {"Count": self.count}
+        return json.dumps(d)
+
+
+def readHandleResult(fpath):
+    with open(fpath) as f:
+        b = f.read()
+    d = json.loads(b)
+    return HandleResult(d["Count"], np.zeros([], dtype=np.uint8))
+
+
 class Handler:
-    def __init__(self, cfg, height, width):
+    def __init__(self, cfg, height, width, lastResultPath):
         dtype = np.uint8
         masker = Masker(cfg["Mask"], height, width, dtype, cfg["Device"])
         numChannels = 3
@@ -44,7 +61,11 @@ class Handler:
         if HAS_AI:
             detector = newYolov8(cfg["Yolo"]["Weights"], cfg["Yolo"]["Size"], [[masked.shape[0], masked.shape[1]]])
             tracker = newTracker(cfg["Track"])
- 
+
+        if lastResultPath != "":
+            lastRes = readHandleResult(lastResultPath)
+            if HAS_AI:
+                self.tracker.prevCount = lastRes.count
 
         self.config = cfg
         self.masker = masker
@@ -55,7 +76,7 @@ class Handler:
         if HAS_AI:
             self.tracker.warmup = len(self.tracker.ids)
 
-    def h(self, img, ts):
+    def h(self, img: npt.NDArray[np.uint8], ts: list[Any]) -> HandleResult:
         img = torch.from_numpy(img).to(self.config["Device"])
         cropped, masked1, maskedViz = self.masker.run(img, ts)
         masked = [masked1]
@@ -69,10 +90,7 @@ class Handler:
             numCounted, trackPredImg = track(self.tracker, outputs_batch[0], maskedViz.cpu())
             ts.append({"name": "track", "t": time.perf_counter()})
 
-        res = argparse.Namespace()
-        res.numCounted = numCounted
-        res.track = trackPredImg
-        return res
+        return HandleResult(numCounted, trackPredImg)
 
 
 def get_color(idx):
@@ -265,7 +283,6 @@ def newTracker(config):
     t.t = tracker
     t.ids = {}
     t.warmup = 0
-    t.prevCount = config["PrevCount"]
     return t
 
 
@@ -357,33 +374,13 @@ class Differ:
     def __repr__(self):
         return f"Differ{{{self.trackIndexPath} {self.srcIndexPath} {self.trackIndex}}}"
 
-    def getWarmup(self) -> tuple[str, Any]:
+    def init(self) -> tuple[str, str, Any]:
         trackIndex, err = self._load()
+        if err:
+            return "", "", err
 
-        # Loop backwards and find the first previous segment.
-        urlIdx = -1
-        i = len(trackIndex)
-        while True:
-            i -= 1
-            if i < 0:
-                break
-            trackLine = trackIndex[i]
-
-            if trackLine.tag == "":
-                urlIdx = i
-                break
-            # ENDLIST and DISCONTINUITY means images from previous segments are separated from the current one.
-            # In these cases, there's no warmup to be done.
-            if trackLine.tag == "EXT-X-ENDLIST":
-                break
-            if trackLine.tag == "EXT-X-DISCONTINUITY":
-                break
-
-        urlStr = ""
-        if urlIdx >= 0:
-            base = trackIndex[urlIdx].b
-            srcDir = os.path.dirname(self.srcIndexPath)
-            urlStr = os.path.join(srcDir, base)
+        lastRes = self._getLastResult(trackIndex)
+        warmup = self._getWarmup(trackIndex)
 
         # Do not load ENDLIST, as it is sure to be different after the next refresh.
         if len(trackIndex) > 0:
@@ -392,7 +389,7 @@ class Differ:
                 trackIndex = trackIndex[ : len(trackIndex)-1]
         self.trackIndex = trackIndex
 
-        return urlStr, None
+        return lastRes, warmup, None
 
     def refresh(self) -> tuple[list[M3U8Line], Any]:
         srcIndex, err = readIndex(self.srcIndexPath)
@@ -453,6 +450,52 @@ class Differ:
         trackIndex = trackIndex[:diffIdx]
         return trackIndex, None
 
+    def _getLastResult(self, trackIndex: list[M3U8Line]) -> str:
+        urlIdx = -1
+        i = len(trackIndex)
+        while True:
+            i -= 1
+            if i < 0:
+                break
+            trackLine = trackIndex[i]
+
+            if trackLine.tag == "":
+                urlIdx = i
+                break
+
+        lastRes = ""
+        if urlIdx >= 0:
+            base = trackIndex[urlIdx].b
+            noext, _ = os.path.splitext(base)
+            lastRes = noext
+        return lastRes
+
+    def _getWarmup(self, trackIndex: list[M3U8Line]) -> str:
+        # Loop backwards and find the first previous segment.
+        urlIdx = -1
+        i = len(trackIndex)
+        while True:
+            i -= 1
+            if i < 0:
+                break
+            trackLine = trackIndex[i]
+
+            if trackLine.tag == "":
+                urlIdx = i
+                break
+            # ENDLIST and DISCONTINUITY means images from previous segments are separated from the current one.
+            # In these cases, there's no warmup to be done.
+            if trackLine.tag == "EXT-X-ENDLIST":
+                break
+            if trackLine.tag == "EXT-X-DISCONTINUITY":
+                break
+
+        urlStr = ""
+        if urlIdx >= 0:
+            base = trackIndex[urlIdx].b
+            urlStr = os.path.join(os.path.dirname(self.srcIndexPath), base)
+        return urlStr
+
 
 def saveIndex(fpath: str, index: list[M3U8Line]):
     b = "\n".join([m.b for m in index])
@@ -495,7 +538,6 @@ class VideoInfo:
         self.height: int = -1
         self.width: int = -1
         self.frames: list[Frame] = []
-        self.outs: list[Any] = []
 
     def __repr__(self):
         return f"VideoInfo {self.fpath} {len(self.frames)}"
@@ -520,7 +562,7 @@ def writeVideo(info: VideoInfo):
     mux.close()
 
 
-def handleVideo(trackVidPath: str, srcVid: str, handler: Any) -> VideoInfo:
+def handleVideo(trackVidPath: str, srcVid: str, handler: Any) -> tuple[VideoInfo, list[HandleResult]]:
     rMux = av.open(srcVid)
     rMux.streams.video[0].thread_type = "AUTO"
     rStream = rMux.streams.video[0]
@@ -534,6 +576,7 @@ def handleVideo(trackVidPath: str, srcVid: str, handler: Any) -> VideoInfo:
     bits = 0
     secs = 0
 
+    handleRes = []
     for packet in rMux.demux(rStream):
         bits += packet.size * 8
         secs += packet.duration * packet.time_base
@@ -544,12 +587,12 @@ def handleVideo(trackVidPath: str, srcVid: str, handler: Any) -> VideoInfo:
             out = handler.h(img, ts)
 
             info.frames.append(Frame(out.track, frame.time_base, frame.pts, frame.dts))
-            info.outs.append(out)
+            handleRes.append(out)
 
     rMux.close()
 
     info.bit_rate = bits / secs
-    return info
+    return info, handleRes
 
 
 class ProcessInfo:
@@ -560,7 +603,7 @@ class ProcessInfo:
         self.video: VideoInfo = None
 
         self.trackPath: str = ""
-        self.track: Any = None
+        self.handleResults: list[HandleResult] = []
 
     def __repr__(self):
         return f"ProcessInfo {self.indexPath} {len(self.indexCurrent)} {len(self.indexNew)} {self.video}"
@@ -609,8 +652,9 @@ def runBackground(qu: queue.Queue, threads: list[ThreadQueue], info: ProcessInfo
     if info.video:
         writeVideo(info.video)
     if info.trackPath != "":
+        lastRes = info.handleResults[len(info.handleResults)-1]
         with open(info.trackPath, "w") as f:
-            f.write(json.dumps(info.track))
+            f.write(lastRes.json())
 
     for t in threads:
         if not t.wait():
@@ -646,15 +690,11 @@ def process(differ: Differ, trackDir: str, handler: Any) -> tuple[ProcessInfo, A
             trackIndexDir = os.path.dirname(differ.trackIndexPath)
             srcVidPath = os.path.join(srcDir, sgm)
             trackVidPath = os.path.join(trackIndexDir, sgm)
-            info.video = handleVideo(trackVidPath, srcVidPath, handler)
+            info.video, info.handleResults = handleVideo(trackVidPath, srcVidPath, handler)
 
             base = os.path.basename(srcVidPath)
             noext, _ = os.path.splitext(base)
             info.trackPath = os.path.join(trackDir, noext+".json")
-            info.track = {}
-            if len(info.video.outs) > 0:
-                lastOut = info.video.outs[len(info.video.outs)-1]
-                info.track = {"Count": lastOut.numCounted}
 
     return info, None
 
@@ -683,12 +723,16 @@ def mainWithErr(args):
     if err:
         return err
 
-    handler = Handler(cfg, height, width)
-
-    # Warmup the tracker, so that it does not count objects in the first frame as new objects.
-    warmup, err = differ.getWarmup()
+    lastRes, warmup, err = differ.init()
     if err:
         return err
+    lastHandleRes = ""
+    if lastRes != "":
+        lastHandleRes = os.path.join(cfg["TrackDir"], lastRes+".json")
+    logging.info("lastHandleRes \"%s\"", lastHandleRes)
+    handler = Handler(cfg, height, width, lastHandleRes)
+
+    # Warmup the tracker, so that it does not count objects in the first frame as new objects.
     logging.info("warmup \"%s\"", warmup)
     if warmup != "":
         handleVideo("", warmup, handler)
@@ -702,15 +746,14 @@ def mainWithErr(args):
         if err:
             return err
 
+        qu = queue.Queue(maxsize=1)
+        stillRunning = list(filter(lambda t: t.is_alive(), threads))
         # For the first video, do things synchronously, so that we get a video as soon as possible.
-        # If not, we may spawn too many threads, leading to slow generation of the first video.
+        # If not, we may spawn too many threads, leading to resource contention and slow first video.
         if firstVideo:
             firstVideo = False
-            qu = queue.Queue(maxsize=1)
-            runBackground(qu, [], info)
+            runBackground(qu, stillRunning, info)
         else:
-            qu = queue.Queue(maxsize=1)
-            stillRunning = list(filter(lambda t: t.is_alive(), threads))
             thrd = threading.Thread(target=runBackground, args=(qu, stillRunning, info))
             thrd.start()
             threads = [t for t in stillRunning]

@@ -62,7 +62,6 @@ func StartRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	count0.Config.Mask.Enable = false
 	count0.Config.Yolo.Weights = "yolo_best.pt"
 	count0.Config.Yolo.Size = 640
-	count0.Config.Track.PrevCount = 10000
 	record.Count = append(record.Count, count0)
 
 	id, err := s.startRecord(record)
@@ -440,9 +439,11 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 			countInit <- nil
 
 			fn := nvr.CountFn(s.Scripts.Count, c.Config, stdouterrF, stdouterrF, statusF)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			var srcDone time.Time
 			for {
-				fn(context.Background())
+				fn(ctx)
 
 				if srcDone.IsZero() {
 					select {
@@ -454,10 +455,12 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 				if srcDone.IsZero() {
 					continue
 				}
-				if time.Now().Sub(srcDone) > time.Minute {
+				// Stop if src has finished for a while.
+				if time.Now().Sub(srcDone) > 5*time.Minute {
 					return
 				}
 
+				// Stop if we are finished processing.
 				sameIndexErr := c.SameIndex()
 				if sameIndexErr == nil {
 					return
