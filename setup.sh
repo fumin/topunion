@@ -6,7 +6,8 @@ if [ -z ${WIFI_LAN_IFACE} ]; then
 	exit 1
 fi
 
-HOME=/home/topunion
+MYUSER=topunion
+HOME=/home/$MYUSER
 cd $HOME
 
 # Download firefox to /usr/local
@@ -127,19 +128,22 @@ subnet ${ETHERNET_PREFIX}.0 netmask 255.255.255.0 {
 EOM
 systemctl restart isc-dhcp-server.service
 
-apt install -y python-is-python3 python3-pip xclip ffmpeg v4l-utils vlc net-tools arp-scan iw
+apt install -y python-is-python3 python3-pip xclip ffmpeg v4l-utils vlc net-tools arp-scan iw curl
 snap install wps-office
 
 # Make it so that everyone can run arp-scan.
 chmod u+s /usr/sbin/arp-scan
 
-GOTAR=go1.21.3.linux-amd64.tar.gz
-wget https://go.dev/dl/$GOTAR
-rm -rf /usr/local/go && tar -C /usr/local -xzf $GOTAR
-rm $GOTAR
-go install golang.org/x/tools/cmd/goimports@latest
+GOBINFULL=/usr/local/go/bin/go
+GOVERSION=$($GOBINFULL version)
+if [ "$GOVERSION" != "go version go1.21.3 linux/amd64" ]; then
+	GOTAR=go1.21.3.linux-amd64.tar.gz
+	wget https://go.dev/dl/$GOTAR
+	rm -rf /usr/local/go && tar -C /usr/local -xzf $GOTAR
+	rm $GOTAR
+fi
+sudo -u $MYUSER $GOBINFULL install golang.org/x/tools/cmd/goimports@latest
 
-MYUSER=topunion
 sudo -u $MYUSER pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
 sudo -u $MYUSER pip install cython
@@ -176,6 +180,7 @@ if [ ! -d $SITE_PACKAGES/ByteTrack ]; then
 	python3 setup.py develop
 fi
 
+sudo -u $MYUSER pip install loguru lap
 if [ ! -d $SITE_PACKAGES/ultralytics ]; then
 	cd $SITE_PACKAGES
 	sudo -u $MYUSER git clone https://github.com/ultralytics/ultralytics.git

@@ -3,6 +3,7 @@ package cuda
 import (
 	"os/exec"
 	"strconv"
+	"strings"
 )
 
 func IsAvailable() bool {
@@ -12,7 +13,8 @@ func IsAvailable() bool {
 	if err != nil {
 		return false
 	}
-	isAvailable, err := strconv.ParseBool(string(stdoutStderr))
+	outerr := strings.TrimSpace(string(stdoutStderr))
+	isAvailable, err := strconv.ParseBool(outerr)
 	if err != nil {
 		return false
 	}

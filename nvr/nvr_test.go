@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"nvr/cuda"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -234,7 +235,7 @@ func countCmd(dst, src, script string) []string {
 	config.TrackIndex = dst
 	config.TrackDir = filepath.Join(filepath.Dir(dst), trackSubdir)
 	config.Src = src
-	config.AI.Smart = false
+	config.AI.Smart = cuda.IsAvailable()
 	config.AI.Device = "cpu"
 	config.AI.Mask.Enable = false
 	config.AI.Yolo.Weights = "yolo_best.pt"

@@ -50,6 +50,8 @@ class Handler:
         detector = None
         tracker = None
         if cfg["Smart"]:
+            global Boxes, Instances, ultralytics, BYTETracker
+
             from detectron2.structures import Boxes, Instances
             
             import ultralytics
@@ -64,7 +66,7 @@ class Handler:
         if lastResultPath != "":
             lastRes = readHandleResult(lastResultPath)
             if cfg["Smart"]:
-                self.tracker.prevCount = lastRes.count
+                tracker.prevCount = lastRes.count
 
         self.config = cfg
         self.masker = masker
@@ -281,6 +283,7 @@ def newTracker(config):
     t = argparse.Namespace()
     t.t = tracker
     t.ids = {}
+    t.prevCount = 0
     t.warmup = 0
     return t
 
@@ -535,7 +538,7 @@ class VideoInfo:
         self.rate: Any = -1
         self.bit_rate: int = -1
         self.height: int = -1
-        self.width: int = -1
+        self.wiidth: int = -1
         self.frames: list[Frame] = []
 
     def __repr__(self):
@@ -545,9 +548,12 @@ class VideoInfo:
 def writeVideo(info: VideoInfo):
     mux = av.open(info.fpath, mode="w", format="mpegts")
     stream = mux.add_stream("h264", rate=info.rate)
-    stream.bit_rate = int(info.bit_rate)
-    stream.height = info.height
-    stream.width = info.width
+
+    frm = info.frames[0]
+    stream.height = frm.img.shape[0]
+    stream.width = frm.img.shape[1]
+    stream.bit_rate = int(info.bit_rate * (stream.height*stream.width) / (info.height*info.width))
+    stream.bit_rate = min(stream.bit_rate, 2048*1024)
 
     for frm in info.frames:
         frame = av.VideoFrame.from_ndarray(frm.img, format="rgb24")

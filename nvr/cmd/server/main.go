@@ -55,12 +55,18 @@ func StartRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	record.RTSP = append(record.RTSP, rtsp0)
 
 	count0 := nvr.Count{Src: rtsp0.Name}
-	count0.Config.AI.Smart = false
+	count0.Config.AI.Smart = true
 	count0.Config.AI.Device = "cpu"
 	if cuda.IsAvailable() {
 		count0.Config.AI.Device = "cuda:0"
 	}
-	count0.Config.AI.Mask.Enable = false
+	count0.Config.AI.Mask.Enable = true
+	count0.Config.AI.Mask.Crop.X = 100
+	count0.Config.AI.Mask.Crop.Y = 0
+	count0.Config.AI.Mask.Crop.W = 1700
+	count0.Config.AI.Mask.Mask.Slope = 10
+	count0.Config.AI.Mask.Mask.Y = 500
+	count0.Config.AI.Mask.Mask.H = 200
 	count0.Config.AI.Yolo.Weights = "yolo_best.pt"
 	count0.Config.AI.Yolo.Size = 640
 	record.Count = append(record.Count, count0)
@@ -69,20 +75,30 @@ func StartRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
+	go func() {
+		<-time.After((1*60 + 3) * time.Second)
+		s.stopRecord(id)
+	}()
+
 	resp := struct{ ID string }{ID: id}
 	return resp, nil
 }
 
-func StopRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}, error) {
-	id := r.FormValue("id")
+func (s *Server) stopRecord(id string) error {
 	rr, ok := s.records.get(id)
 	if !ok {
-		return nil, errors.Errorf("not found")
+		return errors.Errorf("not found")
 	}
 	rr.cancel()
-	s.records.del(id)
-	resp := struct{}{}
-	return resp, nil
+	return nil
+}
+
+func StopRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}, error) {
+	id := r.FormValue("id")
+	if err := s.stopRecord(id); err != nil {
+		return nil, errors.Wrap(err, fmt.Sprintf("\"%s\"", id))
+	}
+	return struct{}{}, nil
 }
 
 func HLSIndex(s *Server, w http.ResponseWriter, r *http.Request) {
@@ -471,7 +487,6 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 
 	<-ctx.Done()
 	rr.record.Stop = time.Now()
-	s.records.set(rr)
 	if err := nvr.WriteRecord(s.RecordDir, rr.record); err != nil {
 		return errors.Wrap(err, "")
 	}

@@ -48,10 +48,10 @@ type CountConfig struct {
 	TrackIndex string
 	TrackDir   string
 	Src        string
-	AI struct{
-		Smart bool
-		Device     string
-		Mask       struct {
+	AI         struct {
+		Smart  bool
+		Device string
+		Mask   struct {
 			Enable bool
 			Crop   struct {
 				X int
