@@ -9,6 +9,7 @@ import logging
 import os
 import queue
 import select
+import subprocess
 import sys
 import threading
 import time
@@ -536,16 +537,52 @@ class VideoInfo:
     def __init__(self):
         self.fpath: str = ""
         self.rate: Any = -1
+        self.time_base: Any = -1
         self.bit_rate: int = -1
         self.height: int = -1
-        self.wiidth: int = -1
+        self.width: int = -1
         self.frames: list[Frame] = []
 
     def __repr__(self):
-        return f"VideoInfo {self.fpath} {len(self.frames)}"
+        return f"VideoInfo fpath: {self.fpath}, rate: {self.rate}, bit_rate: {self.bit_rate}, height: {self.height}, width: {self.width}, frames: {len(self.frames)}"
 
 
 def writeVideo(info: VideoInfo):
+    writeVideoFFMPEG(info)
+    # writeVideoPyAV(info)
+
+
+def writeVideoFFMPEG(info: VideoInfo):
+    noext, _ = os.path.splitext(os.path.basename(info.fpath))
+    imgDir = os.path.join(os.path.dirname(info.fpath), "img", noext)
+    os.makedirs(imgDir, exist_ok=True)
+
+    for i, frm in enumerate(info.frames):
+        img = frm.img[:, :, [2, 1, 0]]
+        fpath = os.path.join(imgDir, f"{i:06}.jpg")
+        cv2.imwrite(fpath, img)
+
+    startPTS = float(info.frames[0].pts * info.rate * info.time_base)
+    cmd = ["ffmpeg",
+        # Automatically overwrite output file.
+        "-y",
+        "-hwaccel", "cuda",
+        # "-hwaccel_output_format", "cuda",
+        # "-extra_hw_frames", "1",
+        "-framerate", f"{info.rate}",
+        "-pattern_type", "glob",
+        "-i", f"{imgDir}/*.jpg",
+        "-filter:v", f"setpts=PTS-STARTPTS+{startPTS}",
+        "-codec:v", "h264_nvenc",
+        # "-preset", "ultrafast",
+        f"{info.fpath}",
+        ]
+    logging.info(_l("cmd", V=" ".join(cmd)))
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    # logging.info("%s", result.stderr)
+
+
+def writeVideoPyAV(info: VideoInfo):
     mux = av.open(info.fpath, mode="w", format="mpegts")
     stream = mux.add_stream("h264", rate=info.rate)
 
@@ -575,6 +612,7 @@ def handleVideo(trackVidPath: str, srcVid: str, handler: Any) -> tuple[VideoInfo
     info = VideoInfo()
     info.fpath = trackVidPath
     info.rate = rStream.average_rate
+    info.time_base = rStream.time_base
     info.height = rStream.height
     info.width = rStream.width
 
@@ -769,7 +807,7 @@ def mainWithErr(args):
         stillRunning = list(filter(lambda t: t.is_alive(), threads))
         # For the first video, do things synchronously, so that we get a video as soon as possible.
         # If not, we may spawn too many threads, leading to resource contention and slow first video.
-        if firstVideo:
+        if firstVideo and False:
             firstVideo = False
             runBackground(qu, stillRunning, info)
         else:
@@ -781,7 +819,9 @@ def mainWithErr(args):
         if info.isEOF():
             break
 
-        stdin = stdinR.readline(info.sleep())
+        sleepSecs = info.sleep()
+        logging.info(_l("sleep", V=sleepSecs))
+        stdin = stdinR.readline(sleepSecs)
         if len(stdin) > 0:
             break
 
