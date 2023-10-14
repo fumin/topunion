@@ -541,10 +541,19 @@ def getImgSize(indexPath: str) -> tuple[int, int, Any]:
 
 
 class Frame:
-    def __init__(self, time_base, pts, dts):
+    def __init__(self, time_base, pts, dts, ai):
         self.time_base = time_base
         self.pts = pts
         self.dts = dts
+        self.ai = ai
+
+
+class Packet:
+    def __init__(self, time_base, pts, dts, frames):
+        self.time_base = time_base
+        self.pts = pts
+        self.dts = dts
+        self.frames = frames
 
 
 class VideoInfo:
@@ -555,16 +564,16 @@ class VideoInfo:
         self.bit_rate: int = -1
         self.height: int = -1
         self.width: int = -1
-        self.frames: list[Frame] = []
+        self.packets: list[Packet] = []
 
     def __repr__(self):
-        return f"VideoInfo fpath: {self.fpath}, rate: {self.rate}, bit_rate: {self.bit_rate}, height: {self.height}, width: {self.width}, frames: {len(self.frames)}"
+        return f"VideoInfo fpath: {self.fpath}, rate: {self.rate}, bit_rate: {self.bit_rate}, height: {self.height}, width: {self.width}, packets: {len(self.packets)}"
 
 
-def writeVideo(info: VideoInfo, handleRes: list[HandleResult]):
-    logging.info(_l("writeVideo", fpath=info.fpath, frames=len(info.frames)))
-    # writeVideoFFMPEG(info, handleRes)
-    writeVideoPyAV(info, handleRes)
+def writeVideo(info: VideoInfo):
+    logging.info(_l("writeVideo", fpath=info.fpath, packets=len(info.packets)))
+    # writeVideoFFMPEG(info)
+    writeVideoPyAV(info)
 
 
 def writeVideoFFMPEG(info: VideoInfo, handleRes: list[HandleResult]):
@@ -614,34 +623,70 @@ def writeVideoFFMPEG(info: VideoInfo, handleRes: list[HandleResult]):
     subprocess.run(["rm", "-r", imgDir])
 
 
-def writeVideoPyAV(info: VideoInfo, handleRes: list[HandleResult]):
+class FrameSeeker:
+    def __init__(self, video):
+        self.video = video
+        self.pIdx = 0
+        self.fIdx = 0
+
+    def seek(self, t):
+        while True:
+            res = self.video[self.pIdx].frames[self.fIdx]
+            if res.pts >= t:
+                return res
+
+            self.fIdx += 1
+            if self.fIdx >= len(self.video[self.pIdx].frames):
+                self.fIdx = 0
+                self.pIdx += 1
+
+    def first(self):
+        return self.video[0].frames[0]
+
+    def last(self):
+        lastPacket = self.video[len(self.video)-1].frames
+        lastFrame = lastPacket[len(lastPacket)-1]
+        return lastFrame
+
+
+def writeVideoPyAV(info: VideoInfo):
     mux = av.open(info.fpath, mode="w", format="mpegts")
     stream = mux.add_stream("h264", rate=info.rate)
+    stream.time_base = info.time_base
 
-    first = handleRes[0]
-    stream.height = first.img.shape[0]
-    stream.width = first.img.shape[1]
+    seeker = FrameSeeker(info.packets)
+    stream.height = seeker.first().ai.img.shape[0]
+    stream.width = seeker.first().ai.img.shape[1]
     stream.bit_rate = int(info.bit_rate * (stream.height*stream.width) / (info.height*info.width))
     stream.bit_rate = min(stream.bit_rate, 2048*1024)
 
-    for i, frm in enumerate(info.frames):
-        res = handleRes[i]
+    interval = 1 / info.time_base / stream.average_rate
+    pts = seeker.first().pts
+    # logging.info("first %s, last %s, interval %s", pts, seeker.last().pts, interval)
+    while True:
+        frm = seeker.seek(pts)
 
-        plotIn = res.img.cpu()
-        plotted = plot(plotIn, res.track.boxes, res.track.ids, res.track.scores, f"egg: {res.track.count}")
+        plotIn = frm.ai.img.cpu()
+        plotted = plot(plotIn, frm.ai.track.boxes, frm.ai.track.ids, frm.ai.track.scores, f"egg: {frm.ai.track.count}")
 
         frame = av.VideoFrame.from_ndarray(plotted, format="rgb24")
-        frame.time_base = frm.time_base
-        frame.pts = frm.pts
-        for packet in stream.encode(frame):
-            mux.mux(packet)
+        frame.pts = int(pts * stream.average_rate * info.time_base)
+        frame.pts = int(pts)
+ 
+        for pck in stream.encode(frame):
+            mux.mux(pck)
 
-    for packet in stream.encode():
-        mux.mux(packet)
+        pts += interval
+        if pts > seeker.last().pts:
+            break
+
+    for pck in stream.encode():
+        mux.mux(pck)
+
     mux.close()
 
 
-def handleVideo(trackVidPath: str, srcVid: str, handler: Any) -> tuple[VideoInfo, list[HandleResult]]:
+def handleVideo(trackVidPath: str, srcVid: str, handler: Any) -> VideoInfo:
     rMux = av.open(srcVid)
     rMux.streams.video[0].thread_type = "AUTO"
     rStream = rMux.streams.video[0]
@@ -656,23 +701,27 @@ def handleVideo(trackVidPath: str, srcVid: str, handler: Any) -> tuple[VideoInfo
     bits = 0
     secs = 0
 
-    handleRes = []
     for packet in rMux.demux(rStream):
-        bits += packet.size * 8
-        secs += packet.duration * packet.time_base
+        frames = []
         for frame in packet.decode():
-            ts = [{"t": time.perf_counter()}]
-
             img = frame.to_rgb().to_ndarray()
             out = handler.h(img)
 
-            info.frames.append(Frame(frame.time_base, frame.pts, frame.dts))
-            handleRes.append(out)
+            frames.append(Frame(frame.time_base, frame.pts, frame.dts, out))
+
+        # PyAV returns packets without frames at the end of a stream.
+        if len(frames) == 0:
+            continue
+
+        info.packets.append(Packet(packet.time_base, packet.pts, packet.dts, frames))
+
+        bits += packet.size * 8
+        secs = (frames[len(frames)-1].pts - frames[0].pts) * packet.time_base
 
     rMux.close()
 
     info.bit_rate = bits / secs
-    return info, handleRes
+    return info
 
 
 class ProcessInfo:
@@ -683,7 +732,6 @@ class ProcessInfo:
         self.video: VideoInfo = None
 
         self.trackPath: str = ""
-        self.handleResults: list[HandleResult] = []
 
     def __repr__(self):
         return f"ProcessInfo {self.indexPath} {len(self.indexCurrent)} {len(self.indexNew)} {self.video}"
@@ -730,11 +778,11 @@ class ThreadQueue:
 
 def runBackground(qu: queue.Queue, threads: list[ThreadQueue], info: ProcessInfo):
     if info.video:
-        writeVideo(info.video, info.handleResults)
+        writeVideo(info.video)
     if info.trackPath != "":
-        lastRes = info.handleResults[len(info.handleResults)-1]
+        last = FrameSeeker(info.video.packets).last()
         with open(info.trackPath, "w") as f:
-            f.write(lastRes.json())
+            f.write(last.ai.json())
 
     for t in threads:
         if not t.wait():
@@ -771,7 +819,7 @@ def process(differ: Differ, trackDir: str, handler: Any, ts: list[Any]) -> tuple
             trackIndexDir = os.path.dirname(differ.trackIndexPath)
             srcVidPath = os.path.join(srcDir, sgm)
             trackVidPath = os.path.join(trackIndexDir, sgm)
-            info.video, info.handleResults = handleVideo(trackVidPath, srcVidPath, handler)
+            info.video = handleVideo(trackVidPath, srcVidPath, handler)
 
             base = os.path.basename(srcVidPath)
             noext, _ = os.path.splitext(base)

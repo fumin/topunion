@@ -125,6 +125,8 @@ func RecordVideoFn(dir string, getInput func() (string, error), stdout, stderr, 
 			"-i", input,
 			// No audio.
 			"-an",
+			// Variable frame rate, otherwise the HLS codec fails.
+			"-vsync", "vfr",
 			// 10 seconds per segment.
 			"-hls_time", strconv.Itoa(HLSTime),
 			// No limit on number of segments.
