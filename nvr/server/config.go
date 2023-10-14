@@ -12,7 +12,7 @@ func startVideoWifi(s *Server) (string, error) {
 	var record nvr.Record
 	rtsp0 := nvr.RTSP{
 		Name:             "RedmiNote4X",
-		NetworkInterface: "wlx00ebd8c3df3d",
+		NetworkInterface: "wlx08bfb849ed0a",
 		MacAddress:       "4c:49:e3:3a:87:4a",
 		Username:         "admin",
 		Password:         "0000",
@@ -22,8 +22,8 @@ func startVideoWifi(s *Server) (string, error) {
 	record.RTSP = append(record.RTSP, rtsp0)
 	rtsp1 := nvr.RTSP{
 		Name:             "Redmi12C",
-		NetworkInterface: "wlx00ebd8c3df3d",
-		MacAddress:       "46:31:36:46:1c:29",
+		NetworkInterface: "wlx08bfb849ed0a",
+		MacAddress:       "f4:1a:9c:67:58:ee",
 		Username:         "admin",
 		Password:         "0000",
 		Port:             8080,

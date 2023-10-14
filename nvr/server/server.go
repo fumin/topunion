@@ -122,7 +122,7 @@ func RecordPage(s *Server, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("%+v", err), http.StatusInternalServerError)
 		return
 	}
-	rd := record.Dir(s.RecordDir)
+	rd := nvr.RecordDir(s.RecordDir, record.ID)
 	for i, rtsp := range record.RTSP {
 		indexPath := filepath.Join(rd, rtsp.Name, nvr.IndexM3U8)
 		record.RTSP[i].Video = s.videoURL(indexPath)
@@ -302,11 +302,16 @@ func (s *Server) startRecord(record nvr.Record) (string, error) {
 	now := time.Now()
 	record.ID = nvr.TimeFormat(now)
 	record.Create = now
-	recordDir := record.Dir(s.RecordDir)
+
+	recordDir := nvr.RecordDir(s.RecordDir, record.ID)
 	for i, c := range record.Count {
 		record.Count[i] = c.Fill(recordDir)
 	}
-
+	for _, rtsp := range record.RTSP {
+		if err := rtsp.Prepare(recordDir); err != nil {
+			return "", errors.Wrap(err, fmt.Sprintf("%#v", rtsp))
+		}
+	}
 	if err := nvr.WriteRecord(s.RecordDir, record); err != nil {
 		return "", errors.Wrap(err, "")
 	}
@@ -337,7 +342,7 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 	close(recordsSet)
 
 	// Prepare RTSPs.
-	recordDir := rr.record.Dir(s.RecordDir)
+	recordDir := nvr.RecordDir(s.RecordDir, rr.record.ID)
 	rtspInit := make(chan error, len(rr.record.RTSP))
 	rtspDone := make(map[string]chan struct{}, len(rr.record.RTSP))
 	for _, rtsp := range rr.record.RTSP {
@@ -346,11 +351,7 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 		go func(rtsp nvr.RTSP) {
 			defer close(done)
 
-			dir, err := rtsp.Prepare(recordDir)
-			if err != nil {
-				rtspInit <- errors.Wrap(err, "")
-				return
-			}
+			dir := rtsp.Dir(recordDir)
 			// Files must be in the same function scope as the loop.
 			// This is to make sure that closing of files are always after the looping is done.
 			// This prevents the loop from writing to closed files.

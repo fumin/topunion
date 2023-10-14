@@ -883,7 +883,7 @@ def mainWithErr(args):
             shouldBreak = True
         ts.append({"name": "checkDone", "t": time.perf_counter()})
 
-        logTS(ts)
+        # logTS(ts)
 
         if shouldBreak:
             break

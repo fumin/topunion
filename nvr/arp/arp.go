@@ -26,16 +26,17 @@ func Scan(networkInterface string) (map[string]Hardware, error) {
 	cmd := exec.Command(program, arg...)
 	b, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, errors.Wrap(err, "")
+		cmdStr := strings.Join(append([]string{program}, arg...), " ")
+		return nil, errors.Wrap(err, fmt.Sprintf("cmd: \"%s\"\noutput: %s", cmdStr, b))
 	}
 
 	hws := make(map[string]Hardware)
 	scanner := bufio.NewScanner(bytes.NewBuffer(b))
 	for scanner.Scan() {
 		line := scanner.Text()
-		cols := strings.Split(line, "\n")
+		cols := strings.Split(line, "\t")
 		if len(cols) < 2 {
-			return nil, errors.Wrap(err, fmt.Sprintf("%#v %s", cols, b))
+			return nil, errors.Errorf("%#v %s", cols, b)
 		}
 
 		var hw Hardware

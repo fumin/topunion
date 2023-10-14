@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -27,6 +28,19 @@ type RTSP struct {
 }
 
 func (info RTSP) GetLink() (string, error) {
+	var err error
+	for i := 0; i < 10; i++ {
+		var link string
+		link, err = info.getLink()
+		if err == nil {
+			return link, nil
+		}
+		<-time.After(500 * time.Millisecond)
+	}
+	return "", err
+}
+
+func (info RTSP) getLink() (string, error) {
 	if info.Link != "" {
 		return info.Link, nil
 	}
@@ -44,12 +58,23 @@ func (info RTSP) GetLink() (string, error) {
 	return info.Link, nil
 }
 
-func (rtsp RTSP) Prepare(recordDir string) (string, error) {
-	dir := filepath.Join(recordDir, rtsp.Name)
-	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
-		return "", errors.Wrap(err, "")
+func (rtsp RTSP) Dir(recordDir string) string {
+	return filepath.Join(recordDir, rtsp.Name)
+}
+
+func (rtsp RTSP) Prepare(recordDir string) error {
+	link, err := rtsp.GetLink()
+	if err != nil {
+		return errors.Wrap(err, "")
 	}
-	return dir, nil
+	if _, err := FFProbe(link); err != nil {
+		return errors.Wrap(err, "")
+	}
+
+	if err := os.MkdirAll(rtsp.Dir(recordDir), os.ModePerm); err != nil {
+		return errors.Wrap(err, "")
+	}
+	return nil
 }
 
 type Track struct {
@@ -77,8 +102,9 @@ func (c Count) Prepare() error {
 	}
 
 	// Wait for src to appear.
+	waitSecs := HLSTime * 16
 	var err error
-	for i := 0; i < HLSTime*4; i++ {
+	for i := 0; i < waitSecs; i++ {
 		_, err = os.Stat(c.Config.Src)
 		if err == nil {
 			break
@@ -86,7 +112,7 @@ func (c Count) Prepare() error {
 		<-time.After(time.Second)
 	}
 	if err != nil {
-		return errors.Wrap(err, "")
+		return errors.Wrap(err, fmt.Sprintf("no src after %d seconds", waitSecs))
 	}
 
 	return nil
@@ -143,10 +169,10 @@ type Record struct {
 	StopTime   string `json:",omitempty"`
 }
 
-func (r Record) Dir(root string) string {
-	yearStr := r.ID[:4]
-	dayStr := r.ID[:8]
-	dir := filepath.Join(root, yearStr, dayStr, r.ID)
+func RecordDir(root, id string) string {
+	yearStr := id[:4]
+	dayStr := id[:8]
+	dir := filepath.Join(root, yearStr, dayStr, id)
 	return dir
 }
 
@@ -156,7 +182,7 @@ func WriteRecord(root string, record Record) error {
 		return errors.Wrap(err, "")
 	}
 
-	recordDir := record.Dir(root)
+	recordDir := RecordDir(root, record.ID)
 	if err := os.MkdirAll(recordDir, os.ModePerm); err != nil {
 		return errors.Wrap(err, "")
 	}
@@ -172,9 +198,7 @@ func ReadRecord(root, id string) (Record, error) {
 	if len(id) < 8 {
 		return Record{}, errors.Errorf("%d", len(id))
 	}
-	yearStr := id[:4]
-	dayStr := id[:8]
-	fpath := filepath.Join(root, yearStr, dayStr, id, ValueFilename)
+	fpath := filepath.Join(RecordDir(root, id), ValueFilename)
 	b, err := os.ReadFile(fpath)
 	if err != nil {
 		return Record{}, errors.Wrap(err, "")
@@ -186,9 +210,23 @@ func ReadRecord(root, id string) (Record, error) {
 	return record, nil
 }
 
+func cleanup(root, id string) error {
+	t, err := TimeParse(id)
+	if err == nil && t.Before(time.Now().AddDate(0, 0, -1)) {
+		return nil
+	}
+
+	dir := RecordDir(root, id)
+	log.Print("cleaning up %s", dir)
+	if err := os.RemoveAll(dir); err != nil {
+		return errors.Wrap(err, "")
+	}
+	return nil
+}
+
 func ListRecord(root string) ([]Record, error) {
 	limit := 30
-	latestIDs := make([]string, 0)
+	records := make([]Record, 0)
 	years, err := os.ReadDir(root)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
@@ -208,21 +246,18 @@ Loop:
 			}
 			for k := len(ids) - 1; k >= 0; k-- {
 				id := ids[k].Name()
-				latestIDs = append(latestIDs, id)
-				if len(latestIDs) >= limit {
+				r, err := ReadRecord(root, id)
+				if err != nil {
+					cleanup(root, id)
+					continue
+				}
+				records = append(records, r)
+				if len(records) >= limit {
 					break Loop
 				}
 			}
 		}
 	}
 
-	records := make([]Record, 0, len(latestIDs))
-	for _, id := range latestIDs {
-		record, err := ReadRecord(root, id)
-		if err != nil {
-			return nil, errors.Wrap(err, fmt.Sprintf("\"%s\"", id))
-		}
-		records = append(records, record)
-	}
 	return records, nil
 }
