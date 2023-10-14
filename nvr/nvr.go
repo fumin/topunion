@@ -127,6 +127,8 @@ func RecordVideoFn(dir string, getInput func() (string, error), stdout, stderr, 
 			"-an",
 			// Variable frame rate, otherwise the HLS codec fails.
 			"-vsync", "vfr",
+			// H264 high profile level 4.2 for maximum support across devices.
+			"-profile:v", "high", "-level:v", "4.2",
 			// 10 seconds per segment.
 			"-hls_time", strconv.Itoa(HLSTime),
 			// No limit on number of segments.

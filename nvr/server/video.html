@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-	<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.4.12/hls.js"></script>
 </head>
 <body>
 <div id="info"></div>
@@ -12,7 +12,12 @@ let page = {{.}};
 
 let video = document.querySelector("#video");
 if (Hls.isSupported()) {
-	let hls = new Hls();
+	let config = {
+		liveSyncDurationCount: 1,
+		liveMaxLatencyDurationCount: 5,
+		liveDurationInfinity: true,
+	};
+	let hls = new Hls(config);
 	hls.on(Hls.Events.ERROR, function(event, data){
 		let errorType = data.type;
 		let errorDetails = data.details;

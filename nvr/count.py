@@ -420,6 +420,11 @@ class Differ:
                 return None, f"track longer than src {i} {len(srcIndex)} {self.trackIndex} {srcIndex} {inspect.getframeinfo(inspect.currentframe())}"
             srcLine = srcIndex[i]
 
+            # ffmpeg may increase TARGETDURATION.
+            # We update accordingly as it has no harm in video processing itself.
+            if trackLine.tag == "EXT-X-TARGETDURATION" and srcLine.tag == "EXT-X-TARGETDURATION":
+                self.trackIndex[i] = srcLine
+                trackLine = self.trackIndex[i]
             if trackLine.b != srcLine.b:
                 return None, f"dst not equal to src {i} {trackLine} {srcLine} {self.trackIndex} {srcIndex} {inspect.getframeinfo(inspect.currentframe())}"
 
