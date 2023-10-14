@@ -864,7 +864,7 @@ def mainWithErr(args):
             firstVideo = False
             runBackground(qu, stillRunning, info)
         else:
-            if len(stillRunning) > 2:
+            if len(stillRunning) > 4:
                 stillRunning[0].wait()
             thrd = threading.Thread(target=runBackground, args=(qu, stillRunning, info))
             thrd.start()

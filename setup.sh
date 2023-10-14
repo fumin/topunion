@@ -99,6 +99,7 @@ network:
       addresses: [${ETHERNET_IP}/24]
   wifis:
     ${WIFI_LAN_IFACE}:
+      regulatory-domain: TW
       access-points:
         "${WIFI_LAN_USERNAME}":
           password: "${WIFI_LAN_PASSWORD}"
