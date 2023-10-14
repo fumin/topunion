@@ -23,12 +23,21 @@ import cv2
 import av
 
 
-class HandleResult:
-    def __init__(self, count, track: npt.NDArray[np.uint8]):
+class TrackOutput:
+    def __init__(self, boxes: list[Any], ids: list[int], scores: list[float], count: int):
+        self.boxes = boxes
+        self.ids = ids
+        self.scores = scores
         self.count = count
+
+
+class HandleResult:
+    def __init__(self, img: Any, track: TrackOutput):
+        self.img = img
         self.track = track
+
     def json(self):
-        d = {"Count": self.count}
+        d = {"Count": self.track.count}
         return json.dumps(d)
 
 
@@ -36,7 +45,9 @@ def readHandleResult(fpath):
     with open(fpath) as f:
         b = f.read()
     d = json.loads(b)
-    return HandleResult(d["Count"], np.zeros([], dtype=np.uint8))
+
+    trackOut = TrackOutput([], [], [], d["Count"])
+    return HandleResult(None, trackOut)
 
 
 class Handler:
@@ -67,7 +78,7 @@ class Handler:
         if lastResultPath != "":
             lastRes = readHandleResult(lastResultPath)
             if cfg["Smart"]:
-                tracker.prevCount = lastRes.count
+                tracker.prevCount = lastRes.track.count
 
         self.config = cfg
         self.masker = masker
@@ -78,21 +89,27 @@ class Handler:
         if self.cfg["Smart"]:
             self.tracker.warmup = len(self.tracker.ids)
 
-    def h(self, img: npt.NDArray[np.uint8], ts: list[Any]) -> HandleResult:
+    def h(self, img: npt.NDArray[np.uint8]) -> HandleResult:
+        ts = [{"t": time.perf_counter()}]
+
         img = torch.from_numpy(img).to(self.config["Device"])
         cropped, masked1, maskedViz = self.masker.run(img, ts)
         masked = [masked1]
+        ts.append({"name": "mask", "t": time.perf_counter()})
 
-        numCounted = 0
-        trackPredImg = masked[0].cpu().numpy()
         if self.cfg["Smart"]:
             outputs_batch = self.detector.predict(self.detector, masked, ts)
-            ts.append({"name": "predict", "t": time.perf_counter()})
+            ts.append({"name": "detect", "t": time.perf_counter()})
 
-            numCounted, trackPredImg = track(self.tracker, outputs_batch[0], maskedViz.cpu())
+            outImg = maskedViz
+            trackOut = track(self.tracker, outputs_batch[0], outImg.shape[0], outImg.shape[1])
             ts.append({"name": "track", "t": time.perf_counter()})
+        else:
+            outImg = masked[0]
+            trackOut = TrackOutput([], [], [], 0)
 
-        return HandleResult(numCounted, trackPredImg)
+        # logTS(ts)
+        return HandleResult(outImg, trackOut)
 
 
 def get_color(idx):
@@ -126,7 +143,7 @@ def plot(inImg, tlwhs, obj_ids, scores, msg):
     return im
 
 
-def track(tracker, outputs, im):
+def track(tracker, outputs, h, w):
     instances = outputs["instances"]
 
     trackBoxes = []
@@ -137,7 +154,6 @@ def track(tracker, outputs, im):
         trackInput = np.zeros([numObjs, 5], dtype=np.float32)
         trackInput[:, 4] = instances.scores.cpu()
         trackInput[:, :4] = instances.pred_boxes.tensor.cpu()
-        w, h = im.shape[1], im.shape[0]
         trackOutput = tracker.t.update(trackInput, [h, w], [h, w])
         for t in trackOutput:
             trackBoxes.append(t.tlwh)
@@ -149,8 +165,7 @@ def track(tracker, outputs, im):
 
     numCounted = len(tracker.ids) - tracker.warmup
     numCounted += tracker.prevCount
-    trackPredImg = plot(im, trackBoxes, trackIDs, trackScores, f"egg: {numCounted}")
-    return numCounted, trackPredImg
+    return TrackOutput(trackBoxes, trackIDs, trackScores, numCounted)
 
 
 class Masker:
@@ -526,8 +541,7 @@ def getImgSize(indexPath: str) -> tuple[int, int, Any]:
 
 
 class Frame:
-    def __init__(self, img, time_base, pts, dts):
-        self.img = img
+    def __init__(self, time_base, pts, dts):
         self.time_base = time_base
         self.pts = pts
         self.dts = dts
@@ -547,12 +561,13 @@ class VideoInfo:
         return f"VideoInfo fpath: {self.fpath}, rate: {self.rate}, bit_rate: {self.bit_rate}, height: {self.height}, width: {self.width}, frames: {len(self.frames)}"
 
 
-def writeVideo(info: VideoInfo):
-    writeVideoFFMPEG(info)
-    # writeVideoPyAV(info)
+def writeVideo(info: VideoInfo, handleRes: list[HandleResult]):
+    logging.info(_l("writeVideo", fpath=info.fpath, frames=len(info.frames)))
+    # writeVideoFFMPEG(info, handleRes)
+    writeVideoPyAV(info, handleRes)
 
 
-def writeVideoFFMPEG(info: VideoInfo):
+def writeVideoFFMPEG(info: VideoInfo, handleRes: list[HandleResult]):
     recordDir = os.path.dirname(info.fpath)
 
     # User tmpfs
@@ -568,7 +583,12 @@ def writeVideoFFMPEG(info: VideoInfo):
     os.makedirs(imgDir, exist_ok=True)
 
     for i, frm in enumerate(info.frames):
-        img = frm.img[:, :, [2, 1, 0]]
+        res = handleRes[i]
+
+        plotIn = res.img.cpu()
+        plotted = plot(plotIn, res.track.boxes, res.track.ids, res.track.scores, f"egg: {res.track.count}")
+        # RGB to BGR.
+        img = plotted[:, :, [2, 1, 0]]
         fpath = os.path.join(imgDir, f"{i:06}.jpg")
         cv2.imwrite(fpath, img)
 
@@ -594,18 +614,23 @@ def writeVideoFFMPEG(info: VideoInfo):
     subprocess.run(["rm", "-r", imgDir])
 
 
-def writeVideoPyAV(info: VideoInfo):
+def writeVideoPyAV(info: VideoInfo, handleRes: list[HandleResult]):
     mux = av.open(info.fpath, mode="w", format="mpegts")
     stream = mux.add_stream("h264", rate=info.rate)
 
-    frm = info.frames[0]
-    stream.height = frm.img.shape[0]
-    stream.width = frm.img.shape[1]
+    first = handleRes[0]
+    stream.height = first.img.shape[0]
+    stream.width = first.img.shape[1]
     stream.bit_rate = int(info.bit_rate * (stream.height*stream.width) / (info.height*info.width))
     stream.bit_rate = min(stream.bit_rate, 2048*1024)
 
-    for frm in info.frames:
-        frame = av.VideoFrame.from_ndarray(frm.img, format="rgb24")
+    for i, frm in enumerate(info.frames):
+        res = handleRes[i]
+
+        plotIn = res.img.cpu()
+        plotted = plot(plotIn, res.track.boxes, res.track.ids, res.track.scores, f"egg: {res.track.count}")
+
+        frame = av.VideoFrame.from_ndarray(plotted, format="rgb24")
         frame.time_base = frm.time_base
         frame.pts = frm.pts
         for packet in stream.encode(frame):
@@ -639,9 +664,9 @@ def handleVideo(trackVidPath: str, srcVid: str, handler: Any) -> tuple[VideoInfo
             ts = [{"t": time.perf_counter()}]
 
             img = frame.to_rgb().to_ndarray()
-            out = handler.h(img, ts)
+            out = handler.h(img)
 
-            info.frames.append(Frame(out.track, frame.time_base, frame.pts, frame.dts))
+            info.frames.append(Frame(frame.time_base, frame.pts, frame.dts))
             handleRes.append(out)
 
     rMux.close()
@@ -705,7 +730,7 @@ class ThreadQueue:
 
 def runBackground(qu: queue.Queue, threads: list[ThreadQueue], info: ProcessInfo):
     if info.video:
-        writeVideo(info.video)
+        writeVideo(info.video, info.handleResults)
     if info.trackPath != "":
         lastRes = info.handleResults[len(info.handleResults)-1]
         with open(info.trackPath, "w") as f:
@@ -724,10 +749,11 @@ def runBackground(qu: queue.Queue, threads: list[ThreadQueue], info: ProcessInfo
     qu.put(True)
 
 
-def process(differ: Differ, trackDir: str, handler: Any) -> tuple[ProcessInfo, Any]:
+def process(differ: Differ, trackDir: str, handler: Any, ts: list[Any]) -> tuple[ProcessInfo, Any]:
     newLines, err = differ.refresh()
     if err:
         return None, err
+    ts.append({"name": "differRefresh", "t": time.perf_counter()})
 
     info = ProcessInfo()
     info.indexPath = differ.trackIndexPath
@@ -752,6 +778,14 @@ def process(differ: Differ, trackDir: str, handler: Any) -> tuple[ProcessInfo, A
             info.trackPath = os.path.join(trackDir, noext+".json")
 
     return info, None
+
+
+def logTS(ts: list[Any]):
+    durs = []
+    for i, t in enumerate(ts[:len(ts)-1]):
+        nextT = ts[i+1]
+        durs.append({"name": nextT["name"], "t": nextT["t"] - t["t"]})
+    logging.info("%s", durs)
 
 
 class StructuredMessage:
@@ -787,6 +821,10 @@ def mainWithErr(args):
     logging.info(_l("config", V=json.dumps(args.c)))
     cfg = json.loads(args.c)
 
+    def threadErr(args):
+        raise ValueError(args)
+    threading.excepthook = threadErr
+
     differ = Differ(cfg["TrackIndex"], cfg["Src"])
     height, width, err = getImgSize(cfg["Src"])
     if err:
@@ -811,9 +849,12 @@ def mainWithErr(args):
     stdinR = newStdinReader()
     threads = []
     while True:
-        info, err = process(differ, cfg["TrackDir"], handler)
+        ts = [{"t": time.perf_counter()}]
+
+        info, err = process(differ, cfg["TrackDir"], handler, ts)
         if err:
             return err
+        ts.append({"name": "process", "t": time.perf_counter()})
 
         qu = queue.Queue(maxsize=1)
         stillRunning = list(filter(lambda t: t.is_alive(), threads))
@@ -823,18 +864,28 @@ def mainWithErr(args):
             firstVideo = False
             runBackground(qu, stillRunning, info)
         else:
+            if len(stillRunning) > 2:
+                stillRunning[0].wait()
             thrd = threading.Thread(target=runBackground, args=(qu, stillRunning, info))
             thrd.start()
             threads = [t for t in stillRunning]
             threads.append(ThreadQueue(thrd, qu))
+        ts.append({"name": "startBackground", "t": time.perf_counter()})
 
+        shouldBreak = False
         if info.isEOF():
-            break
+            shouldBreak = True
 
         sleepSecs = info.sleep()
         logging.info(_l("sleep", V=sleepSecs))
         stdin = stdinR.readline(sleepSecs)
         if len(stdin) > 0:
+            shouldBreak = True
+        ts.append({"name": "checkDone", "t": time.perf_counter()})
+
+        logTS(ts)
+
+        if shouldBreak:
             break
 
     for t in threads:
