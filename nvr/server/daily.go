@@ -3,7 +3,6 @@ package server
 import (
 	"fmt"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -11,8 +10,8 @@ import (
 	"github.com/pkg/errors"
 )
 
-func (s *Server) DeleteOldVideos(days int) error {
-	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+func (s *Server) DeleteOldVideos(dur time.Duration) error {
+	cutoff := time.Now().Add(-dur)
 	cutoffDayStr := cutoff.Format("20060102")
 
 	olds := make([]string, 0)
@@ -35,18 +34,34 @@ Loop:
 			olds = append(olds, filepath.Join(s.RecordDir, year, day))
 		}
 	}
-	log.Printf("vvvvvvv %#v", olds)
 
 	for _, old := range olds {
-		matches, err := fs.Glob(os.DirFS(old), "*")
-		if err != nil {
+		if err := walkVideo(old, os.Remove); err != nil {
 			return errors.Wrap(err, "")
-		}
-		log.Printf("%s %#v", old, matches)
-		for _, m := range matches {
-			log.Printf("%#v", m)
 		}
 	}
 
+	return nil
+}
+
+func walkVideo(dir string, fn func(string) error) error {
+	err := fs.WalkDir(os.DirFS(dir), ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return errors.Wrap(err, "")
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if filepath.Ext(path) != ".ts" {
+			return nil
+		}
+		if err := fn(filepath.Join(dir, path)); err != nil {
+			return errors.Wrap(err, "")
+		}
+		return nil
+	})
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
 	return nil
 }

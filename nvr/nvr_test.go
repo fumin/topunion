@@ -244,5 +244,5 @@ func countCmd(dst, src, script string) []string {
 	if err != nil {
 		panic(err)
 	}
-	return []string{"python", script, "-c=" + string(cfg)}
+	return []string{Python, script, "-c=" + string(cfg)}
 }

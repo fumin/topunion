@@ -19,6 +19,8 @@ const (
 	IndexM3U8     = "index.m3u8"
 	ValueFilename = "v.json"
 	HLSTime       = 10
+
+	Python = "python3"
 )
 
 //go:embed count.py
@@ -74,7 +76,6 @@ type CountConfig struct {
 }
 
 func CountFn(script string, cfg CountConfig, stdout, stderr, statusW io.Writer) func(context.Context) {
-	const program = "python"
 	run := func(ctx context.Context) (*exec.Cmd, error) {
 		c, err := json.Marshal(cfg)
 		if err != nil {
@@ -82,7 +83,7 @@ func CountFn(script string, cfg CountConfig, stdout, stderr, statusW io.Writer) 
 		}
 		arg := []string{script, "-c=" + string(c)}
 
-		cmd := exec.CommandContext(ctx, program, arg...)
+		cmd := exec.CommandContext(ctx, Python, arg...)
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			return nil, errors.Wrap(err, "")

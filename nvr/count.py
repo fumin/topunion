@@ -666,7 +666,7 @@ def writeVideoPyAV(info: VideoInfo):
     stream.bit_rate = int(info.bit_rate * (stream.height*stream.width) / (info.height*info.width))
     stream.bit_rate = min(stream.bit_rate, 2048*1024)
 
-    interval = 1 / info.time_base / stream.average_rate
+    interval = 1 / info.time_base / stream.codec_context.framerate
     pts = seeker.first().pts
     # logging.info("first %s, last %s, interval %s", pts, seeker.last().pts, interval)
     while True:
@@ -676,7 +676,6 @@ def writeVideoPyAV(info: VideoInfo):
         plotted = plot(plotIn, frm.ai.track.boxes, frm.ai.track.ids, frm.ai.track.scores, f"egg: {frm.ai.track.count}")
 
         frame = av.VideoFrame.from_ndarray(plotted, format="rgb24")
-        frame.pts = int(pts * stream.average_rate * info.time_base)
         frame.pts = int(pts)
  
         for pck in stream.encode(frame):
@@ -877,7 +876,7 @@ def mainWithErr(args):
     cfg = json.loads(args.c)
 
     def threadErr(args):
-        traceback.print_exception(args.exc_value)
+        traceback.print_tb(args.exc_traceback)
         raise ValueError(args)
     threading.excepthook = threadErr
 

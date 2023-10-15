@@ -49,7 +49,7 @@ func mainWithErr() error {
 		return errors.Wrap(err, "")
 	}
 
-	daily(s.DeleteOldVideos())
+	daily(func() error { return s.DeleteOldVideos(10 * 24 * time.Hour) })
 
 	log.Printf("listening at %s", s.Server.Addr)
 	if err := s.Server.ListenAndServe(); err != http.ErrServerClosed {
