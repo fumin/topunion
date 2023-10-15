@@ -309,6 +309,7 @@ func (s *Server) startRecord(record nvr.Record) (string, error) {
 	}
 	for _, rtsp := range record.RTSP {
 		if err := rtsp.Prepare(recordDir); err != nil {
+			os.RemoveAll(recordDir)
 			return "", errors.Wrap(err, fmt.Sprintf("%#v", rtsp))
 		}
 	}

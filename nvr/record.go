@@ -1,7 +1,7 @@
 package nvr
 
 import (
-	"bytes"
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -119,16 +119,34 @@ func (c Count) Prepare() error {
 }
 
 func (c Count) SameIndex() error {
-	src, err := os.ReadFile(c.Config.Src)
+	srcF, err := os.Open(c.Config.Src)
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
-	track, err := os.ReadFile(c.Config.TrackIndex)
+	defer srcF.Close()
+	trackF, err := os.Open(c.Config.TrackIndex)
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
-	if !bytes.Equal(src, track) {
-		return errors.Errorf("not equal")
+	defer trackF.Close()
+
+	src, track := bufio.NewScanner(srcF), bufio.NewScanner(trackF)
+	for src.Scan() {
+		if !track.Scan() {
+			return errors.Errorf("no track")
+		}
+		if src.Text() != track.Text() {
+			return errors.Errorf("\"%s\" \"%s\"", src.Text(), track.Text())
+		}
+	}
+	if track.Scan() {
+		return errors.Errorf("track not EOF")
+	}
+	if err := src.Err(); err != nil {
+		return errors.Wrap(err, "")
+	}
+	if err := track.Err(); err != nil {
+		return errors.Wrap(err, "")
 	}
 	return nil
 }
@@ -217,7 +235,7 @@ func cleanup(root, id string) error {
 	}
 
 	dir := RecordDir(root, id)
-	log.Print("cleaning up %s", dir)
+	log.Printf("cleaning up %s", dir)
 	if err := os.RemoveAll(dir); err != nil {
 		return errors.Wrap(err, "")
 	}

@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from typing import Any
 
 import numpy as np
@@ -698,6 +699,7 @@ def handleVideo(trackVidPath: str, srcVid: str, handler: Any) -> VideoInfo:
 
     info = VideoInfo()
     info.fpath = trackVidPath
+    info.bit_rate = rMux.bit_rate
     info.rate = rStream.average_rate
     info.time_base = rStream.time_base
     info.height = rStream.height
@@ -725,7 +727,7 @@ def handleVideo(trackVidPath: str, srcVid: str, handler: Any) -> VideoInfo:
 
     rMux.close()
 
-    info.bit_rate = bits / secs
+    # info.bit_rate = bits / secs
     return info
 
 
@@ -875,6 +877,7 @@ def mainWithErr(args):
     cfg = json.loads(args.c)
 
     def threadErr(args):
+        traceback.print_exception(args.exc_value)
         raise ValueError(args)
     threading.excepthook = threadErr
 
