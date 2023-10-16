@@ -237,6 +237,9 @@ func countCmd(dst, src, script string) []string {
 	config.Src = src
 	config.AI.Smart = cuda.IsAvailable()
 	config.AI.Device = "cpu"
+	if config.AI.Smart {
+		config.AI.Device = "cuda:0"
+	}
 	config.AI.Mask.Enable = false
 	config.AI.Yolo.Weights = "yolo_best.pt"
 	config.AI.Yolo.Size = 640

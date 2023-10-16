@@ -37,9 +37,7 @@ func FFProbe(input string) (ProbeOutput, error) {
 		return ProbeOutput{}, errors.Wrap(err, fmt.Sprintf("stdout: %s, stderr: %s", stdoutB, stderrB))
 	}
 	out.Stdout, out.Stderr = string(stdoutB), string(stderrB)
-	out.Format.Duration, err = strconv.ParseFloat(out.Format.DurationStr, 64)
-	if err != nil {
-		return ProbeOutput{}, errors.Wrap(err, fmt.Sprintf("%#v", out))
-	}
+	// Live streams may not have duration, so ignore errors.
+	out.Format.Duration, _ = strconv.ParseFloat(out.Format.DurationStr, 64)
 	return out, nil
 }

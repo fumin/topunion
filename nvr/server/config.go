@@ -19,7 +19,7 @@ func startVideoWifi(s *Server) (string, error) {
 		Port:             8080,
 		Path:             "/h264_ulaw.sdp",
 	}
-	record.RTSP = append(record.RTSP, rtsp0)
+	// record.RTSP = append(record.RTSP, rtsp0)
 	rtsp1 := nvr.RTSP{
 		Name:             "Redmi12C",
 		NetworkInterface: "wlx08bfb849ed0a",
@@ -43,7 +43,7 @@ func startVideoWifi(s *Server) (string, error) {
 	count0.Config.AI.Mask.Mask.H = 200
 	count0.Config.AI.Yolo.Weights = "yolo_best.pt"
 	count0.Config.AI.Yolo.Size = 640
-	record.Count = append(record.Count, count0)
+	// record.Count = append(record.Count, count0)
 
 	count1 := nvr.Count{Src: rtsp1.Name}
 	count1.Config.AI.Smart = true

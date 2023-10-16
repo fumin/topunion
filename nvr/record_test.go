@@ -3,6 +3,7 @@ package nvr
 import (
 	"context"
 	"io"
+	"nvr/cuda"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,7 +47,13 @@ func TestSameIndex(t *testing.T) {
 
 	// Run dst.
 	c := Count{Src: filepath.Base(srcDir)}
+	c.Config.AI.Smart = cuda.IsAvailable()
 	c.Config.AI.Device = "cpu"
+	if c.Config.AI.Smart {
+		c.Config.AI.Device = "cuda:0"
+	}
+	c.Config.AI.Yolo.Weights = "yolo_best.pt"
+	c.Config.AI.Yolo.Size = 640
 	c = c.Fill(dir)
 	if err := c.Prepare(); err != nil {
 		t.Fatalf("%+v", err)

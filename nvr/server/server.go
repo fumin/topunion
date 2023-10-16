@@ -35,8 +35,8 @@ const (
 )
 
 func StartRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}, error) {
-	id, err := startVideoFile(s, "sample/shilin20230826.mp4")
-	// id, err := startVideoWifi(s)
+	// id, err := startVideoFile(s, "sample/shilin20230826.mp4")
+	id, err := startVideoWifi(s)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}

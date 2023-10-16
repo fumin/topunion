@@ -2,6 +2,7 @@ package server
 
 import (
 	"math"
+	"nvr/cuda"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,9 +34,14 @@ func TestStartRecord(t *testing.T) {
 	rtsp0 := nvr.RTSP{Name: "testVid", Link: testVid}
 	record.RTSP = append(record.RTSP, rtsp0)
 	count0 := nvr.Count{Src: rtsp0.Name}
-	count0.Config.AI.Smart = false
+	count0.Config.AI.Smart = cuda.IsAvailable()
 	count0.Config.AI.Device = "cpu"
+	if count0.Config.AI.Smart {
+		count0.Config.AI.Device = "cuda:0"
+	}
 	count0.Config.AI.Mask.Enable = false
+	count0.Config.AI.Yolo.Weights = "../yolo_best.pt"
+	count0.Config.AI.Yolo.Size = 640
 	record.Count = append(record.Count, count0)
 
 	id, err := s.startRecord(record)
@@ -63,6 +69,8 @@ func TestStartRecord(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 	if readRecord.Cleanup.IsZero() {
+		b, _ := os.ReadFile(filepath.Join(filepath.Dir(readRecord.Count[0].Config.TrackIndex), stdouterrFilename))
+		t.Logf("%s", b)
 		t.Fatalf("%#v", readRecord)
 	}
 
