@@ -35,8 +35,8 @@ const (
 )
 
 func StartRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}, error) {
-	// id, err := startVideoFile(s, "sample/shilin20230826.mp4")
-	id, err := startVideoWifi(s)
+	id, err := startVideoFile(s, "sample/shilin20230826.mp4")
+	// id, err := startVideoWifi(s)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
@@ -424,19 +424,30 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 			countInit <- nil
 
 			fn := nvr.CountFn(s.Scripts.Count, c.Config, stdouterrF, stdouterrF, statusF)
-			delayedCtx := nvr.WithDelay(srcDoneC, 5*time.Minute)
+			countCtx, countCancel := context.WithCancel(context.Background())
+			go func() {
+				defer countCancel()
+				<-srcDoneC
+				deadline := time.Now().Add(5 * time.Minute)
+				for {
+					// Stop if we have been lagging behind src for too long.
+					if time.Now().After(deadline) {
+						return
+					}
+					// Stop if we have finished processing.
+					sameIndexErr := c.SameIndex()
+					if sameIndexErr == nil {
+						return
+					}
+					<-time.After(time.Second)
+				}
+			}()
 			for {
-				fn(delayedCtx)
+				fn(countCtx)
 				select {
-				case <-delayedCtx.Done():
+				case <-countCtx.Done():
 					return
 				default:
-				}
-
-				// Stop if we have finished processing.
-				sameIndexErr := c.SameIndex()
-				if sameIndexErr == nil {
-					return
 				}
 			}
 		}(c)

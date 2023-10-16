@@ -106,9 +106,10 @@ func RecordVideoFn(dir string, getInput func() (string, error), stdout, stderr, 
 	const hlsFlags = "" +
 		// Append to the same HLS index file.
 		"append_list" +
-		// Use microseconds in segment filename.
-		"+second_level_segment_duration" +
-		// Add program start time info.
+		// Add segment index in filename to deduplicate filenames within the same second.
+		"+second_level_segment_index" +
+		// Add program time info explicitly.
+		// If we do not, with append_list turned on, ffmpeg will nonetheless insist on adding garbage program time, resulting in a worse situation.
 		"+program_date_time"
 	run := func(ctx context.Context) (*exec.Cmd, error) {
 		input, err := getInput()
@@ -116,10 +117,10 @@ func RecordVideoFn(dir string, getInput func() (string, error), stdout, stderr, 
 			return nil, errors.Wrap(err, "")
 		}
 
-		segmentFName := filepath.Join(dir, "%s_%%06t.ts")
+		segmentFName := filepath.Join(dir, "%s_%%06d.ts")
 		// strftime does not support "%s" in windows.
 		if runtime.GOOS == "windows" {
-			segmentFName = filepath.Join(dir, "%Y%m%d_%H%M%S_%%06t.ts")
+			segmentFName = filepath.Join(dir, "%Y%m%d_%H%M%S_%%06d.ts")
 		}
 		indexFName := filepath.Join(dir, IndexM3U8)
 		arg := []string{
@@ -140,9 +141,15 @@ func RecordVideoFn(dir string, getInput func() (string, error), stdout, stderr, 
 			"-hls_segment_filename", segmentFName,
 			indexFName,
 		}
-		// If input is a local file, loop it forever.
+		// Special handling when input is a local file.
 		if _, err := os.Stat(input); err == nil {
-			arg = append([]string{"-stream_loop", "-1"}, arg...)
+			iArg := []string{
+				// Loop infinitely.
+				"-stream_loop", "-1",
+				// Read file at realtime rate, otherwise ffmpeg reads as fast as possible.
+				"-re",
+			}
+			arg = append(iArg, arg...)
 		}
 
 		program := "ffmpeg"

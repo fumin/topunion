@@ -901,6 +901,7 @@ def mainWithErr(args):
         handler.afterWarmup()
 
     firstVideo = True
+    breakReason = ""
     stdinR = newStdinReader()
     threads = []
     while True:
@@ -927,25 +928,26 @@ def mainWithErr(args):
             threads.append(ThreadQueue(thrd, qu))
         ts.append({"name": "startBackground", "t": time.perf_counter()})
 
-        shouldBreak = False
         if info.isEOF():
-            shouldBreak = True
+            breakReason = "EOF"
 
         sleepSecs = info.sleep()
         logging.info(_l("sleep", V=sleepSecs))
         stdin = stdinR.readline(sleepSecs)
         if len(stdin) > 0:
-            shouldBreak = True
+            breakReason = stdin.strip()
         ts.append({"name": "checkDone", "t": time.perf_counter()})
 
         # logTS(ts)
 
-        if shouldBreak:
+        if breakReason != "":
             break
 
+    logging.info(_l("break", V=breakReason))
     for t in threads:
         t.wait()
 
+    logging.info(_l("exit"))
     return None
 
 

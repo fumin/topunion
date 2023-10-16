@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strconv"
 
 	"github.com/pkg/errors"
 )
@@ -15,6 +16,9 @@ type ProbeOutput struct {
 	Format struct {
 		Filename   string `json:"filename"`
 		FormatName string `json:"format_name"`
+		Duration   float64
+
+		DurationStr string `json:"duration"`
 	} `json:"format"`
 }
 
@@ -33,5 +37,9 @@ func FFProbe(input string) (ProbeOutput, error) {
 		return ProbeOutput{}, errors.Wrap(err, fmt.Sprintf("stdout: %s, stderr: %s", stdoutB, stderrB))
 	}
 	out.Stdout, out.Stderr = string(stdoutB), string(stderrB)
+	out.Format.Duration, err = strconv.ParseFloat(out.Format.DurationStr, 64)
+	if err != nil {
+		return ProbeOutput{}, errors.Wrap(err, fmt.Sprintf("%#v", out))
+	}
 	return out, nil
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -41,16 +42,6 @@ func TimeParse(name string) (time.Time, error) {
 	return parsed, nil
 }
 
-func WithDelay(parent <-chan struct{}, duration time.Duration) context.Context {
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		defer cancel()
-		<-parent
-		<-time.After(duration)
-	}()
-	return ctx
-}
-
 func newCmdFn(w io.Writer, fn func(context.Context) (*exec.Cmd, error)) func(context.Context) {
 	run := func(ctx context.Context) {
 		cmd, err := fn(ctx)
@@ -82,6 +73,8 @@ type CmdMsg struct {
 	Pid   int
 	Event string
 	Err   string `json:",omitempty"`
+
+	ExitCode *int `json:",omitempty"`
 }
 
 func onCmdInit(w io.Writer, initErr error) {
@@ -142,6 +135,8 @@ func onCmdExitErr(w io.Writer, cmd *exec.Cmd, waitErr error) error {
 		Pid:   cmd.Process.Pid,
 		Event: CmdEventExit,
 	}
+	code := cmd.ProcessState.ExitCode()
+	m.ExitCode = &code
 	if waitErr != nil {
 		m.Err = fmt.Sprintf("%+v", waitErr)
 	}
@@ -153,4 +148,27 @@ func onCmdExitErr(w io.Writer, cmd *exec.Cmd, waitErr error) error {
 		return errors.Wrap(err, "")
 	}
 	return nil
+}
+
+func ReadCmdMsg(fpath string) ([]CmdMsg, error) {
+	f, err := os.Open(fpath)
+	if err != nil {
+		return nil, errors.Wrap(err, "")
+	}
+	defer f.Close()
+
+	msgs := make([]CmdMsg, 0)
+	dec := json.NewDecoder(f)
+	for {
+		var m CmdMsg
+		err := dec.Decode(&m)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, errors.Wrap(err, "")
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs, nil
 }
