@@ -19,6 +19,7 @@ type RTSP struct {
 	Link             string
 	NetworkInterface string
 	MacAddress       string
+	Scheme           string
 	Username         string
 	Password         string
 	Port             int
@@ -53,7 +54,7 @@ func (info RTSP) getLink() (string, error) {
 	if !ok {
 		return "", errors.Errorf("%#v %#v", info, hws)
 	}
-	info.Link = fmt.Sprintf("rtsp://%s:%s@%s:%d%s", info.Username, info.Password, hw.IP, info.Port, info.Path)
+	info.Link = fmt.Sprintf("%s://%s:%s@%s:%d%s", info.Scheme, info.Username, info.Password, hw.IP, info.Port, info.Path)
 
 	return info.Link, nil
 }

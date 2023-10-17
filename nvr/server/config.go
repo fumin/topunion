@@ -14,22 +14,35 @@ func startVideoWifi(s *Server) (string, error) {
 		Name:             "RedmiNote4X",
 		NetworkInterface: "wlx08bfb849ed0a",
 		MacAddress:       "4c:49:e3:3a:87:4a",
+		Scheme:           "http",
 		Username:         "admin",
 		Password:         "0000",
 		Port:             8080,
-		Path:             "/h264_ulaw.sdp",
+		Path:             "/video",
 	}
 	// record.RTSP = append(record.RTSP, rtsp0)
 	rtsp1 := nvr.RTSP{
 		Name:             "Redmi12C",
 		NetworkInterface: "wlx08bfb849ed0a",
 		MacAddress:       "f4:1a:9c:67:58:ee",
+		Scheme:           "http",
 		Username:         "admin",
 		Password:         "0000",
 		Port:             8080,
-		Path:             "/h264_ulaw.sdp",
+		Path:             "/video",
 	}
-	record.RTSP = append(record.RTSP, rtsp1)
+	// record.RTSP = append(record.RTSP, rtsp1)
+	rtsp2 := nvr.RTSP{
+		Name:             "FuminPhone",
+		NetworkInterface: "wlx08bfb849ed0a",
+		MacAddress:       "94:7b:ae:94:ca:80",
+		Scheme:           "http",
+		Username:         "admin",
+		Password:         "0000",
+		Port:             8080,
+		Path:             "/video",
+	}
+	record.RTSP = append(record.RTSP, rtsp2)
 
 	count0 := nvr.Count{Src: rtsp0.Name}
 	count0.Config.AI.Smart = true
@@ -57,7 +70,7 @@ func startVideoWifi(s *Server) (string, error) {
 	count1.Config.AI.Mask.Mask.H = 200
 	count1.Config.AI.Yolo.Weights = "yolo_best.pt"
 	count1.Config.AI.Yolo.Size = 640
-	record.Count = append(record.Count, count1)
+	// record.Count = append(record.Count, count1)
 
 	id, err := s.startRecord(record)
 	if err != nil {

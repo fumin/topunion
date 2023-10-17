@@ -10,7 +10,8 @@ MYUSER=topunion
 HOME=/home/$MYUSER
 cd $HOME
 
-# Download firefox to /usr/local
+# Stop ubuntu updates from messing with nvidia and cuda!
+apt remove -y unattended-upgrades
 mv /usr/bin/update-manager /usr/bin/update-manager-xxx
 mv /usr/bin/update-notifier /usr/bin/update-notifier-xxx
 # mv /usr/local/firefox/updater /usr/local/firefox/updater-xxx
@@ -41,7 +42,7 @@ apt update
 apt install -y language-pack-zh-hans fonts-noto-cjk-extra ibus-libpinyin
 apt install -y nvidia-driver-535=535.104.12-0ubuntu1
 # reboot
-apt install -y cuda=11.8.0-1
+apt install -y --allow-downgrades cuda=11.8.0-1
 cat > saxpy.cu <<- EOM
 #include <stdio.h>
 
@@ -129,8 +130,12 @@ subnet ${ETHERNET_PREFIX}.0 netmask 255.255.255.0 {
 EOM
 systemctl restart isc-dhcp-server.service
 
-apt install -y python-is-python3 python3-pip xclip ffmpeg v4l-utils vlc net-tools arp-scan iw curl
+apt install -y python-is-python3 python3-pip ffmpeg xclip v4l-utils net-tools arp-scan iw curl
 snap install wps-office
+
+# Debian stupidlly removed ffmpeg's ability to play RTSP streams.
+# https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=982299
+snap install vlc
 
 # Make it so that everyone can run arp-scan.
 chmod u+s /usr/sbin/arp-scan
