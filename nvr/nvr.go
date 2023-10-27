@@ -101,7 +101,7 @@ func CountFn(script string, cfg CountConfig, stdout, stderr, statusW io.Writer) 
 	return newCmdFn(statusW, run)
 }
 
-func RecordVideoFn(dir string, getInput func() (string, error), stdout, stderr, statusW io.Writer) func(context.Context) {
+func RecordVideoFn(dir string, getInput func() ([]string, error), stdout, stderr, statusW io.Writer) func(context.Context) {
 	const program = "ffmpeg"
 	const hlsFlags = "" +
 		// Append to the same HLS index file.
@@ -123,8 +123,7 @@ func RecordVideoFn(dir string, getInput func() (string, error), stdout, stderr, 
 			segmentFName = filepath.Join(dir, "%Y%m%d_%H%M%S_%%06d.ts")
 		}
 		indexFName := filepath.Join(dir, IndexM3U8)
-		arg := []string{
-			"-i", input,
+		arg := append(input, []string{
 			// No audio.
 			"-an",
 			// Variable frame rate, otherwise the HLS codec fails.
@@ -140,19 +139,8 @@ func RecordVideoFn(dir string, getInput func() (string, error), stdout, stderr, 
 			"-hls_flags", hlsFlags,
 			"-hls_segment_filename", segmentFName,
 			indexFName,
-		}
-		// Special handling when input is a local file.
-		if _, err := os.Stat(input); err == nil {
-			iArg := []string{
-				// Loop infinitely.
-				"-stream_loop", "-1",
-				// Read file at realtime rate, otherwise ffmpeg reads as fast as possible.
-				"-re",
-			}
-			arg = append(iArg, arg...)
-		}
+		}...)
 
-		program := "ffmpeg"
 		cmd := exec.CommandContext(ctx, program, arg...)
 		stdin, err := cmd.StdinPipe()
 		if err != nil {

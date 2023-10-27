@@ -2,8 +2,10 @@ package nvr
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"log"
 	"os"
 	"path/filepath"
@@ -16,59 +18,91 @@ import (
 
 type RTSP struct {
 	Name             string
-	Link             string
+	Input            []string
 	NetworkInterface string
 	MacAddress       string
-	Scheme           string
-	Username         string
-	Password         string
-	Port             int
-	Path             string
 
 	Video string `json:",omitempty"`
 }
 
-func (info RTSP) GetLink() (string, error) {
+func (info RTSP) GetInput() ([]string, error) {
 	var err error
 	for i := 0; i < 10; i++ {
-		var link string
-		link, err = info.getLink()
+		var input []string
+		input, err = info.getInput()
 		if err == nil {
-			return link, nil
+			return input, nil
 		}
 		<-time.After(500 * time.Millisecond)
 	}
-	return "", err
+	return nil, err
 }
 
-func (info RTSP) getLink() (string, error) {
-	if info.Link != "" {
-		return info.Link, nil
+func (info RTSP) getInput() ([]string, error) {
+	if len(info.Input) == 0 {
+		return nil, errors.Errorf("empty input")
+	}
+	last := info.Input[len(info.Input)-1]
+
+	var input []string
+	switch {
+	case info.NetworkInterface != "":
+		hws, err := arp.Scan(info.NetworkInterface)
+		if err != nil {
+			return nil, errors.Wrap(err, "")
+		}
+		hw, ok := hws[info.MacAddress]
+		if !ok {
+			return nil, errors.Errorf("%#v", hws)
+		}
+		data := struct{ IP string }{IP: hw.IP}
+		buf := bytes.NewBuffer(nil)
+		if err := template.Must(template.New("").Parse(last)).Execute(buf, data); err != nil {
+			return nil, errors.Errorf("%#v", data)
+		}
+
+		input = make([]string, len(info.Input))
+		copy(input, info.Input[:len(info.Input)-1])
+		input[len(input)-1] = string(buf.Bytes())
+	default:
+		input = info.Input
 	}
 
-	hws, err := arp.Scan(info.NetworkInterface)
-	if err != nil {
-		return "", errors.Wrap(err, "")
+	if len(input) == 1 {
+		input = append([]string{"-i"}, input[0])
 	}
-	hw, ok := hws[info.MacAddress]
-	if !ok {
-		return "", errors.Errorf("%#v %#v", info, hws)
-	}
-	info.Link = fmt.Sprintf("%s://%s:%s@%s:%d%s", info.Scheme, info.Username, info.Password, hw.IP, info.Port, info.Path)
-
-	return info.Link, nil
+	return input, nil
 }
 
 func (rtsp RTSP) Dir(recordDir string) string {
 	return filepath.Join(recordDir, rtsp.Name)
 }
 
+func fixFFProbeArg(input []string) []string {
+	fixed := make([]string, 0, len(input))
+	i := 0
+	for i < len(input) {
+		inp := input[i]
+
+		switch inp {
+		case "-stream_loop":
+			i += 2
+		case "-re":
+			i += 1
+		default:
+			fixed = append(fixed, inp)
+			i++
+		}
+	}
+	return fixed
+}
+
 func (rtsp RTSP) Prepare(recordDir string) error {
-	link, err := rtsp.GetLink()
+	input, err := rtsp.GetInput()
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
-	if _, err := FFProbe(link); err != nil {
+	if _, err := FFProbe(fixFFProbeArg(input)); err != nil {
 		return errors.Wrap(err, "")
 	}
 

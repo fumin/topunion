@@ -43,7 +43,10 @@ func TestDeleteOldVideos(t *testing.T) {
 			}
 
 			record := nvr.Record{ID: nvr.TimeFormat(tc.now)}
-			rtsp0 := nvr.RTSP{Name: "testVid", Link: testVid}
+			rtsp0 := nvr.RTSP{
+				Name:  "testVid",
+				Input: []string{"-stream_loop", "-1", "-re", "-i", testVid},
+			}
 			record.RTSP = append(record.RTSP, rtsp0)
 
 			// Run src.
@@ -56,7 +59,7 @@ func TestDeleteOldVideos(t *testing.T) {
 			srcDone := make(chan struct{})
 			go func() {
 				defer close(srcDone)
-				nvr.RecordVideoFn(rtsp0.Dir(recordDir), rtsp0.GetLink, io.Discard, io.Discard, io.Discard)(srcCtx)
+				nvr.RecordVideoFn(rtsp0.Dir(recordDir), rtsp0.GetInput, io.Discard, io.Discard, io.Discard)(srcCtx)
 			}()
 			for i := 0; i < 10; i++ {
 				n, _ := numVideos(recordDir)

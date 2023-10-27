@@ -372,7 +372,7 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 			defer statusF.Close()
 			rtspInit <- nil
 
-			fn := nvr.RecordVideoFn(dir, rtsp.GetLink, stdouterrF, stdouterrF, statusF)
+			fn := nvr.RecordVideoFn(dir, rtsp.GetInput, stdouterrF, stdouterrF, statusF)
 			for {
 				fn(ctx)
 				select {

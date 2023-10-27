@@ -22,8 +22,8 @@ type ProbeOutput struct {
 	} `json:"format"`
 }
 
-func FFProbe(input string) (ProbeOutput, error) {
-	cmd := exec.Command("ffprobe", "-print_format", "json", "-show_format", "-show_streams", input)
+func FFProbe(input []string) (ProbeOutput, error) {
+	cmd := exec.Command("ffprobe", append([]string{"-print_format", "json", "-show_format", "-show_streams"}, input...)...)
 	stdout, stderr := bytes.NewBuffer(nil), bytes.NewBuffer(nil)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	err := cmd.Run()

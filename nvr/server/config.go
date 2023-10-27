@@ -12,35 +12,23 @@ func startVideoWifi(s *Server) (string, error) {
 	var record nvr.Record
 	rtsp0 := nvr.RTSP{
 		Name:             "RedmiNote4X",
+		Input:            []string{"rtsp://admin:0000@{{.IP}}:8080/h264_ulaw.sdp"},
 		NetworkInterface: "wlx08bfb849ed0a",
 		MacAddress:       "4c:49:e3:3a:87:4a",
-		Scheme:           "http",
-		Username:         "admin",
-		Password:         "0000",
-		Port:             8080,
-		Path:             "/video",
 	}
 	// record.RTSP = append(record.RTSP, rtsp0)
 	rtsp1 := nvr.RTSP{
 		Name:             "Redmi12C",
+		Input:            []string{"rtsp://admin:0000@{{.IP}}:8080/h264_ulaw.sdp"},
 		NetworkInterface: "wlx08bfb849ed0a",
 		MacAddress:       "f4:1a:9c:67:58:ee",
-		Scheme:           "http",
-		Username:         "admin",
-		Password:         "0000",
-		Port:             8080,
-		Path:             "/video",
 	}
 	// record.RTSP = append(record.RTSP, rtsp1)
 	rtsp2 := nvr.RTSP{
 		Name:             "FuminPhone",
+		Input:            []string{"-rtsp_transport", "tcp", "-i", "rtsp://admin:0000@{{.IP}}:8080/h264_ulaw.sdp"},
 		NetworkInterface: "wlx08bfb849ed0a",
 		MacAddress:       "94:7b:ae:94:ca:80",
-		Scheme:           "http",
-		Username:         "admin",
-		Password:         "0000",
-		Port:             8080,
-		Path:             "/video",
 	}
 	record.RTSP = append(record.RTSP, rtsp2)
 
@@ -81,7 +69,7 @@ func startVideoWifi(s *Server) (string, error) {
 
 func startVideoFile(s *Server, fpath string) (string, error) {
 	var record nvr.Record
-	rtsp0 := nvr.RTSP{Name: "rtsp0", Link: fpath}
+	rtsp0 := nvr.RTSP{Name: "rtsp0", Input: []string{fpath}}
 	record.RTSP = append(record.RTSP, rtsp0)
 
 	count0 := nvr.Count{Src: rtsp0.Name}

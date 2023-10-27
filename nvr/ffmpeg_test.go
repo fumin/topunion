@@ -24,7 +24,7 @@ func TestFFProbe(t *testing.T) {
 		t.Fatalf("%+v %s", err, b)
 	}
 
-	probe, err := FFProbe(fpath)
+	probe, err := FFProbe([]string{"-i", fpath})
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}

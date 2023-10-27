@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"text/template/parse"
 	"time"
 
 	"github.com/pkg/errors"
@@ -40,6 +41,34 @@ func TimeParse(name string) (time.Time, error) {
 
 	parsed := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), nanoSec, t.Location())
 	return parsed, nil
+}
+
+func TmplFields(t *parse.Tree) map[string]struct{} {
+	fields := make(map[string]struct{})
+	for _, n := range t.Root.Nodes {
+		action, ok := n.(*parse.ActionNode)
+		if !ok {
+			continue
+		}
+		cmds := action.Pipe.Cmds
+		if len(cmds) == 0 {
+			continue
+		}
+		args := cmds[0].Args
+		if len(args) == 0 {
+			continue
+		}
+		field, ok := args[0].(*parse.FieldNode)
+		if !ok {
+			continue
+		}
+		if len(field.Ident) == 0 {
+			continue
+		}
+
+		fields[field.Ident[0]] = struct{}{}
+	}
+	return fields
 }
 
 func newCmdFn(w io.Writer, fn func(context.Context) (*exec.Cmd, error)) func(context.Context) {

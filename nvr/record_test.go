@@ -34,8 +34,8 @@ func TestSameIndex(t *testing.T) {
 	if err := os.MkdirAll(srcDir, os.ModePerm); err != nil {
 		t.Fatalf("%+v", err)
 	}
-	getInput := func() (string, error) {
-		return testVid, nil
+	getInput := func() ([]string, error) {
+		return []string{"-stream_loop", "-1", "-re", "-i", testVid}, nil
 	}
 	srcCtx, srcCancel := context.WithCancel(context.Background())
 	defer srcCancel()

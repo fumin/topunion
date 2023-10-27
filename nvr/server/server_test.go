@@ -31,7 +31,10 @@ func TestStartRecord(t *testing.T) {
 	}
 
 	record := nvr.Record{ID: nvr.TimeFormat(time.Now())}
-	rtsp0 := nvr.RTSP{Name: "testVid", Link: testVid}
+	rtsp0 := nvr.RTSP{
+		Name:  "testVid",
+		Input: []string{"-stream_loop", "-1", "-re", "-i", testVid},
+	}
 	record.RTSP = append(record.RTSP, rtsp0)
 	count0 := nvr.Count{Src: rtsp0.Name}
 	count0.Config.AI.Smart = cuda.IsAvailable()
@@ -75,7 +78,7 @@ func TestStartRecord(t *testing.T) {
 	}
 
 	// Check video output.
-	probe, err := nvr.FFProbe(readRecord.Count[0].Config.TrackIndex)
+	probe, err := nvr.FFProbe([]string{"-i", readRecord.Count[0].Config.TrackIndex})
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
