@@ -111,6 +111,7 @@ network:
         use-routes: false
 EOM
 netplan --debug apply
+# iw dev ${WIFI_LAN_IFACE} scan -u
 
 apt install -y isc-dhcp-server
 cat > /etc/dhcp/dhcpd.conf <<- EOM
