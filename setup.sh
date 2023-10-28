@@ -111,7 +111,24 @@ network:
         use-routes: false
 EOM
 netplan --debug apply
-# iw dev ${WIFI_LAN_IFACE} scan -u
+
+# Force scan for our wifi network.
+# This is because netplan has bugs that prevent automatically scanning 5G networks.
+cat > ${HOME}/scan_${WIFI_LAN_IFACE}.sh <<- EOM
+while true; do
+        SCANOUT=\$(sudo iw dev ${WIFI_LAN_IFACE} scan -u)
+        echo "\$SCANOUT"
+        LINE=\$(echo "\$SCANOUT" | grep ${WIFI_LAN_USERNAME})
+        if [ ! -z "\$LINE" ]; then
+                break
+        fi
+        sleep 1
+done
+EOM
+chmod +x ${HOME}/scan_${WIFI_LAN_IFACE}.sh
+cat > /etc/cron.d/scan_${WIFI_LAN_IFACE} <<- EOM
+@reboot root ${HOME}/scan_${WIFI_LAN_IFACE}.sh > /tmp/scan_${WIFI_LAN_IFACE}.txt 2>&1
+EOM
 
 apt install -y isc-dhcp-server
 cat > /etc/dhcp/dhcpd.conf <<- EOM
@@ -131,7 +148,7 @@ subnet ${ETHERNET_PREFIX}.0 netmask 255.255.255.0 {
 EOM
 systemctl restart isc-dhcp-server.service
 
-apt install -y python-is-python3 python3-pip ffmpeg xclip v4l-utils net-tools arp-scan iw curl
+apt install -y python-is-python3 python3-pip ffmpeg xclip v4l-utils net-tools arp-scan iw curl tree
 snap install wps-office
 
 # Debian stupidlly removed ffmpeg's ability to play RTSP streams.
