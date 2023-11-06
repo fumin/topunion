@@ -72,7 +72,7 @@ func TestStartRecord(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 	if readRecord.Cleanup.IsZero() {
-		b, _ := os.ReadFile(filepath.Join(filepath.Dir(readRecord.Count[0].Config.TrackIndex), stdouterrFilename))
+		b, _ := os.ReadFile(filepath.Join(filepath.Dir(readRecord.Count[0].Config.TrackIndex), nvr.StderrFilename))
 		t.Logf("%s", b)
 		t.Fatalf("%#v", readRecord)
 	}
@@ -87,7 +87,7 @@ func TestStartRecord(t *testing.T) {
 	}
 
 	// Check child processes exited with exit code 0.
-	msgs, err := nvr.ReadCmdMsg(filepath.Join(filepath.Dir(readRecord.Count[0].Config.TrackIndex), statusFilename))
+	msgs, err := nvr.ReadCmdMsg(filepath.Join(filepath.Dir(readRecord.Count[0].Config.TrackIndex), nvr.StatusFilename))
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}

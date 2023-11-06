@@ -29,14 +29,11 @@ const (
 	PathHLSIndex    = "/HLSIndex"
 	PathVideo       = "/Video"
 	PathServe       = "/Serve"
-
-	stdouterrFilename = "stdouterr.txt"
-	statusFilename    = "status.txt"
 )
 
 func StartRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}, error) {
-	// id, err := startVideoFile(s, "sample/shilin20230826.mp4")
-	id, err := startVideoWifi(s)
+	id, err := startVideoFile(s, "sample/shilin20230826.mp4")
+	// id, err := startVideoWifi(s)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
@@ -344,7 +341,6 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 
 	// Prepare RTSPs.
 	recordDir := nvr.RecordDir(s.RecordDir, rr.record.ID)
-	rtspInit := make(chan error, len(rr.record.RTSP))
 	rtspDone := make(map[string]chan struct{}, len(rr.record.RTSP))
 	for _, rtsp := range rr.record.RTSP {
 		done := make(chan struct{})
@@ -353,26 +349,7 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 			defer close(done)
 
 			dir := rtsp.Dir(recordDir)
-			// Files must be in the same function scope as the loop.
-			// This is to make sure that closing of files are always after the looping is done.
-			// This prevents the loop from writing to closed files.
-			stdouterrPath := filepath.Join(dir, stdouterrFilename)
-			stdouterrF, err := os.Create(stdouterrPath)
-			if err != nil {
-				rtspInit <- errors.Wrap(err, "")
-				return
-			}
-			defer stdouterrF.Close()
-			statusPath := filepath.Join(dir, statusFilename)
-			statusF, err := os.Create(statusPath)
-			if err != nil {
-				rtspInit <- errors.Wrap(err, "")
-				return
-			}
-			defer statusF.Close()
-			rtspInit <- nil
-
-			fn := nvr.RecordVideoFn(dir, rtsp.GetInput, stdouterrF, stdouterrF, statusF)
+			fn := nvr.RecordVideoFn(dir, rtsp.GetInput)
 			for {
 				fn(ctx)
 				select {
@@ -383,47 +360,20 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 			}
 		}(rtsp)
 	}
-	for i := 0; i < len(rr.record.RTSP); i++ {
-		if err := <-rtspInit; err != nil {
-			return errors.Wrap(err, "")
-		}
-	}
 
 	// Prepare counts.
-	countInit := make(chan error, len(rr.record.Count))
 	countDone := make([]chan struct{}, 0, len(rr.record.Count))
 	for _, c := range rr.record.Count {
+		if err := c.Prepare(); err != nil {
+			return errors.Wrap(err, "")
+		}
+
 		srcDoneC := rtspDone[c.Src]
 		done := make(chan struct{})
 		countDone = append(countDone, done)
 		go func(c nvr.Count) {
 			defer close(done)
 
-			if err := c.Prepare(); err != nil {
-				countInit <- errors.Wrap(err, "")
-				return
-			}
-			// Files must be in the same function scope as the loop.
-			// This is to make sure that closing of files are always after the looping is done.
-			// This prevents the loop from writing to closed files.
-			dir := filepath.Dir(c.Config.TrackIndex)
-			stdouterrPath := filepath.Join(dir, stdouterrFilename)
-			stdouterrF, err := os.Create(stdouterrPath)
-			if err != nil {
-				countInit <- errors.Wrap(err, "")
-				return
-			}
-			defer stdouterrF.Close()
-			statusPath := filepath.Join(dir, statusFilename)
-			statusF, err := os.Create(statusPath)
-			if err != nil {
-				countInit <- errors.Wrap(err, "")
-				return
-			}
-			defer statusF.Close()
-			countInit <- nil
-
-			fn := nvr.CountFn(s.Scripts.Count, c.Config, stdouterrF, stdouterrF, statusF)
 			countCtx, countCancel := context.WithCancel(context.Background())
 			go func() {
 				defer countCancel()
@@ -442,6 +392,9 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 					<-time.After(time.Second)
 				}
 			}()
+
+			dir := filepath.Dir(c.Config.TrackIndex)
+			fn := nvr.CountFn(dir, s.Scripts.Count, c.Config)
 			for {
 				fn(countCtx)
 				select {
@@ -451,11 +404,6 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 				}
 			}
 		}(c)
-	}
-	for i := 0; i < len(rr.record.Count); i++ {
-		if err := <-countInit; err != nil {
-			return errors.Wrap(err, "")
-		}
 	}
 
 	<-ctx.Done()

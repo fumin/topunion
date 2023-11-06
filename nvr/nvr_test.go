@@ -32,6 +32,7 @@ func TestCountDiscontinuity(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 
+	// Prepare src.
 	srcDir := filepath.Join(dir, "src")
 	if err := os.MkdirAll(srcDir, os.ModePerm); err != nil {
 		t.Fatalf("%+v", err)
@@ -44,6 +45,10 @@ func TestCountDiscontinuity(t *testing.T) {
 	if b, err := exec.Command(cmd[0], cmd[1:]...).CombinedOutput(); err != nil {
 		t.Fatalf("%+v %s", err, b)
 	}
+	cmd = strings.Split("ffmpeg -f lavfi -i smptebars -t 0.1 -f mpegts "+filepath.Join(srcDir, "2.ts"), " ")
+	if b, err := exec.Command(cmd[0], cmd[1:]...).CombinedOutput(); err != nil {
+		t.Fatalf("%+v %s", err, b)
+	}
 	b := `#EXTM3U
 #EXT-X-VERSION:3
 #EXT-X-TARGETDURATION:1
@@ -51,25 +56,30 @@ func TestCountDiscontinuity(t *testing.T) {
 #EXT-X-DISCONTINUITY
 #EXTINF:0.1,
 0.ts
-#EXT-X-DISCONTINUITY
 #EXTINF:0.1,
 1.ts
+#EXT-X-DISCONTINUITY
+#EXTINF:0.1,
+2.ts
 #EXT-X-ENDLIST`
 	src := filepath.Join(srcDir, IndexM3U8)
 	if err := os.WriteFile(src, []byte(b), os.ModePerm); err != nil {
 		t.Fatalf("%+v %s", err, b)
 	}
 
+	// Prepare dst.
 	dstDir := filepath.Join(dir, "dst")
-	trackDir := filepath.Join(dstDir, trackSubdir)
-	if err := os.MkdirAll(trackDir, os.ModePerm); err != nil {
+	if err := os.MkdirAll(dstDir, os.ModePerm); err != nil {
 		t.Fatalf("%+v", err)
 	}
 	cmd = strings.Split("ffmpeg -f lavfi -i smptebars -t 0.1 -f mpegts "+filepath.Join(dstDir, "0.ts"), " ")
 	if b, err := exec.Command(cmd[0], cmd[1:]...).CombinedOutput(); err != nil {
 		t.Fatalf("%+v %s", err, b)
 	}
-	if err := os.WriteFile(filepath.Join(trackDir, "0.json"), []byte(`{"Count": 0}`), os.ModePerm); err != nil {
+	if err := appendFile(filepath.Join(dstDir, "track.json"), []byte(`{"Segment": "1.ts", "Count": 20}`+"\n")); err != nil {
+		t.Fatalf("%+v", err)
+	}
+	if err := appendFile(filepath.Join(dstDir, "track.json"), []byte(`{"Segment": "0.ts", "Count": 30}`+"\n")); err != nil {
 		t.Fatalf("%+v", err)
 	}
 	b = `#EXTM3U
@@ -79,6 +89,8 @@ func TestCountDiscontinuity(t *testing.T) {
 #EXT-X-DISCONTINUITY
 #EXTINF:0.1,
 0.ts
+#EXTINF:0.1,
+1.ts
 #EXT`
 	dst := filepath.Join(dstDir, IndexM3U8)
 	if err := os.WriteFile(dst, []byte(b), os.ModePerm); err != nil {
@@ -95,7 +107,7 @@ func TestCountDiscontinuity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	if err := lastResultEq(filepath.Join(trackDir, "0.json"), logs); err != nil {
+	if err := lastResultEq(20, logs); err != nil {
 		t.Fatalf("%+v", err)
 	}
 	if err := warmupEq("", logs); err != nil {
@@ -144,15 +156,14 @@ func TestCountWarmup(t *testing.T) {
 	}
 
 	dstDir := filepath.Join(dir, "dst")
-	trackDir := filepath.Join(dstDir, trackSubdir)
-	if err := os.MkdirAll(trackDir, os.ModePerm); err != nil {
+	if err := os.MkdirAll(dstDir, os.ModePerm); err != nil {
 		t.Fatalf("%+v", err)
 	}
 	cmd = strings.Split("ffmpeg -f lavfi -i smptebars -t 0.1 -f mpegts "+filepath.Join(dstDir, "0.ts"), " ")
 	if b, err := exec.Command(cmd[0], cmd[1:]...).CombinedOutput(); err != nil {
 		t.Fatalf("%+v %s", err, b)
 	}
-	if err := os.WriteFile(filepath.Join(trackDir, "0.json"), []byte(`{"Count": 0}`), os.ModePerm); err != nil {
+	if err := appendFile(filepath.Join(dstDir, "track.json"), []byte(`{"Segment": "0.ts", "Count": 20}`+"\n")); err != nil {
 		t.Fatalf("%+v", err)
 	}
 	b = `#EXTM3U
@@ -172,7 +183,7 @@ func TestCountWarmup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	if err := lastResultEq(filepath.Join(trackDir, "0.json"), logs); err != nil {
+	if err := lastResultEq(20, logs); err != nil {
 		t.Fatalf("%+v %s", err, stdouterr)
 	}
 	if err := warmupEq(filepath.Join(srcDir, "0.ts"), logs); err != nil {
@@ -180,13 +191,13 @@ func TestCountWarmup(t *testing.T) {
 	}
 }
 
-func lastResultEq(expected string, logs []map[string]interface{}) error {
+func lastResultEq(expected int, logs []map[string]interface{}) error {
 	for _, l := range logs {
 		if l["Levent"] != "lastResult" {
 			continue
 		}
-		if l["V"] != expected {
-			return errors.Errorf("\"%s\"", l["V"])
+		if cnt, ok := l["Count"].(float64); !(ok && cnt == float64(expected)) {
+			return errors.Errorf("%#v", l)
 		}
 		return nil
 	}
@@ -199,7 +210,7 @@ func warmupEq(expected string, logs []map[string]interface{}) error {
 			continue
 		}
 		if l["V"] != expected {
-			return errors.Errorf("\"%s\"", l["V"])
+			return errors.Errorf("%#v", l)
 		}
 		return nil
 	}
@@ -208,7 +219,6 @@ func warmupEq(expected string, logs []map[string]interface{}) error {
 
 func runCount(dst, src, script string) ([]map[string]interface{}, []byte, error) {
 	cmd := countCmd(dst, src, script)
-	// Write the discontinuity after 0.ts.
 	b, err := exec.Command(cmd[0], cmd[1:]...).CombinedOutput()
 	if err != nil {
 		return nil, nil, errors.Wrap(err, fmt.Sprintf("\"%s\" %s", strings.Join(cmd, " "), b))
@@ -223,7 +233,7 @@ func runCount(dst, src, script string) ([]map[string]interface{}, []byte, error)
 			break
 		}
 		if err != nil {
-			return nil, nil, errors.Wrap(err, "")
+			return nil, nil, errors.Wrap(err, fmt.Sprintf("%s", b))
 		}
 		logs = append(logs, m)
 	}
@@ -232,9 +242,9 @@ func runCount(dst, src, script string) ([]map[string]interface{}, []byte, error)
 
 func countCmd(dst, src, script string) []string {
 	var config CountConfig
-	config.TrackIndex = dst
-	config.TrackDir = filepath.Join(filepath.Dir(dst), trackSubdir)
 	config.Src = src
+	config.TrackIndex = dst
+	config.TrackLog = filepath.Join(filepath.Dir(dst), "track.json")
 	config.AI.Smart = cuda.IsAvailable()
 	config.AI.Device = "cpu"
 	if config.AI.Smart {
@@ -248,4 +258,19 @@ func countCmd(dst, src, script string) []string {
 		panic(err)
 	}
 	return []string{Python, script, "-c=" + string(cfg)}
+}
+
+func appendFile(fpath string, data []byte) error {
+	f, err := os.OpenFile(fpath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return errors.Wrap(err, "")
+	}
+	if err := f.Close(); err != nil {
+		return errors.Wrap(err, "")
+	}
+	return nil
 }

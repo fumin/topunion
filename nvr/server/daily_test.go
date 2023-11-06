@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"io"
 	"nvr"
 	"os"
 	"os/exec"
@@ -59,7 +58,7 @@ func TestDeleteOldVideos(t *testing.T) {
 			srcDone := make(chan struct{})
 			go func() {
 				defer close(srcDone)
-				nvr.RecordVideoFn(rtsp0.Dir(recordDir), rtsp0.GetInput, io.Discard, io.Discard, io.Discard)(srcCtx)
+				nvr.RecordVideoFn(rtsp0.Dir(recordDir), rtsp0.GetInput)(srcCtx)
 			}()
 			for i := 0; i < 10; i++ {
 				n, _ := numVideos(recordDir)

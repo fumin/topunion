@@ -4,7 +4,6 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +20,10 @@ const (
 	HLSTime       = 10
 
 	Python = "python3"
+
+	StdoutFilename = "stdout.txt"
+	StderrFilename = "stderr.txt"
+	StatusFilename = "status.txt"
 )
 
 //go:embed count.py
@@ -48,7 +51,7 @@ func NewScripts(dir string) (Scripts, error) {
 
 type CountConfig struct {
 	TrackIndex string
-	TrackDir   string
+	TrackLog   string
 	Src        string
 	AI         struct {
 		Smart  bool
@@ -75,8 +78,8 @@ type CountConfig struct {
 	}
 }
 
-func CountFn(script string, cfg CountConfig, stdout, stderr, statusW io.Writer) func(context.Context) {
-	run := func(ctx context.Context) (*exec.Cmd, error) {
+func CountFn(dir, script string, cfg CountConfig) func(context.Context) {
+	run := func(ctx context.Context, stdout, stderr *os.File) (*exec.Cmd, error) {
 		c, err := json.Marshal(cfg)
 		if err != nil {
 			return nil, errors.Wrap(err, "")
@@ -98,10 +101,10 @@ func CountFn(script string, cfg CountConfig, stdout, stderr, statusW io.Writer) 
 
 		return cmd, nil
 	}
-	return newCmdFn(statusW, run)
+	return newCmdFn(dir, run)
 }
 
-func RecordVideoFn(dir string, getInput func() ([]string, error), stdout, stderr, statusW io.Writer) func(context.Context) {
+func RecordVideoFn(dir string, getInput func() ([]string, error)) func(context.Context) {
 	const program = "ffmpeg"
 	const hlsFlags = "" +
 		// Append to the same HLS index file.
@@ -111,7 +114,7 @@ func RecordVideoFn(dir string, getInput func() ([]string, error), stdout, stderr
 		// Add program time info explicitly.
 		// If we do not, with append_list turned on, ffmpeg will nonetheless insist on adding garbage program time, resulting in a worse situation.
 		"+program_date_time"
-	run := func(ctx context.Context) (*exec.Cmd, error) {
+	run := func(ctx context.Context, stdout, stderr *os.File) (*exec.Cmd, error) {
 		input, err := getInput()
 		if err != nil {
 			return nil, errors.Wrap(err, "")
@@ -156,5 +159,5 @@ func RecordVideoFn(dir string, getInput func() ([]string, error), stdout, stderr
 
 		return cmd, nil
 	}
-	return newCmdFn(statusW, run)
+	return newCmdFn(dir, run)
 }

@@ -113,7 +113,8 @@ func (rtsp RTSP) Prepare(recordDir string) error {
 }
 
 type Track struct {
-	Count int
+	Segment string
+	Count   int
 }
 
 type Count struct {
@@ -127,12 +128,12 @@ type Count struct {
 func (c Count) Fill(recordDir string) Count {
 	c.Config.Src = filepath.Join(recordDir, c.Src, IndexM3U8)
 	c.Config.TrackIndex = filepath.Join(recordDir, c.Src+"Track", IndexM3U8)
-	c.Config.TrackDir = filepath.Join(filepath.Dir(c.Config.TrackIndex), "track")
+	c.Config.TrackLog = filepath.Join(filepath.Dir(c.Config.TrackIndex), "track.json")
 	return c
 }
 
 func (c Count) Prepare() error {
-	if err := os.MkdirAll(c.Config.TrackDir, os.ModePerm); err != nil {
+	if err := os.MkdirAll(filepath.Dir(c.Config.TrackIndex), os.ModePerm); err != nil {
 		return errors.Wrap(err, "")
 	}
 
@@ -187,21 +188,28 @@ func (c Count) SameIndex() error {
 }
 
 func (c Count) LastTrack() (*Track, error) {
-	entries, err := os.ReadDir(c.Config.TrackDir)
+	f, err := os.Open(c.Config.TrackLog)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
-	if len(entries) == 0 {
+	defer f.Close()
+
+	lines := make([]string, 0)
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, errors.Wrap(err, "")
+	}
+
+	if len(lines) == 0 {
 		return &Track{}, nil
 	}
 
-	last := filepath.Join(c.Config.TrackDir, entries[len(entries)-1].Name())
-	b, err := os.ReadFile(last)
-	if err != nil {
-		return nil, errors.Wrap(err, "")
-	}
+	last := lines[len(lines)-1]
 	var track Track
-	if err := json.Unmarshal(b, &track); err != nil {
+	if err := json.Unmarshal([]byte(last), &track); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
 	return &track, nil

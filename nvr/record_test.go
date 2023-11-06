@@ -2,7 +2,6 @@ package nvr
 
 import (
 	"context"
-	"io"
 	"nvr/cuda"
 	"os"
 	"os/exec"
@@ -40,10 +39,8 @@ func TestSameIndex(t *testing.T) {
 	srcCtx, srcCancel := context.WithCancel(context.Background())
 	defer srcCancel()
 	go func() {
-		RecordVideoFn(srcDir, getInput, io.Discard, io.Discard, io.Discard)(srcCtx)
+		RecordVideoFn(srcDir, getInput)(srcCtx)
 	}()
-	<-time.After(500 * time.Millisecond)
-	srcCancel()
 
 	// Run dst.
 	c := Count{Src: filepath.Base(srcDir)}
@@ -58,16 +55,21 @@ func TestSameIndex(t *testing.T) {
 	if err := c.Prepare(); err != nil {
 		t.Fatalf("%+v", err)
 	}
+	dstDir := filepath.Dir(c.Config.TrackIndex)
+	if err := os.MkdirAll(dstDir, os.ModePerm); err != nil {
+		t.Fatalf("%+v", err)
+	}
 	dstCtx, dstCancel := context.WithCancel(context.Background())
 	defer dstCancel()
 	dstDone := make(chan struct{})
 	go func() {
 		defer close(dstDone)
-		w := io.Discard
-		// w = os.Stderr
-		CountFn(scripts.Count, c.Config, w, w, w)(dstCtx)
-		CountFn(scripts.Count, c.Config, w, w, w)(dstCtx)
+		CountFn(dstDir, scripts.Count, c.Config)(dstCtx)
+		CountFn(dstDir, scripts.Count, c.Config)(dstCtx)
 	}()
+
+	<-time.After(500 * time.Millisecond)
+	srcCancel()
 	<-dstDone
 
 	if err := c.SameIndex(); err != nil {

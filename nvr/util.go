@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"text/template/parse"
@@ -71,22 +72,42 @@ func TmplFields(t *parse.Tree) map[string]struct{} {
 	return fields
 }
 
-func newCmdFn(w io.Writer, fn func(context.Context) (*exec.Cmd, error)) func(context.Context) {
+func newCmdFn(dir string, fn func(context.Context, *os.File, *os.File) (*exec.Cmd, error)) func(context.Context) {
 	run := func(ctx context.Context) {
-		cmd, err := fn(ctx)
+		statusPath := filepath.Join(dir, StatusFilename)
+		status, err := os.OpenFile(statusPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
-			onCmdInit(w, err)
+			log.Printf("\"%s\" %+v", statusPath, err)
+			return
+		}
+		defer status.Close()
+		stdout, err := os.OpenFile(filepath.Join(dir, StdoutFilename), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			onCmdInit(status, err)
+			return
+		}
+		defer stdout.Close()
+		stderr, err := os.OpenFile(filepath.Join(dir, StderrFilename), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			onCmdInit(status, err)
+			return
+		}
+		defer stderr.Close()
+
+		cmd, err := fn(ctx, stdout, stderr)
+		if err != nil {
+			onCmdInit(status, err)
 			return
 		}
 
 		if err := cmd.Start(); err != nil {
-			onCmdInit(w, err)
+			onCmdInit(status, err)
 			return
 		}
-		onCmdStart(w, cmd)
+		onCmdStart(status, cmd)
 
 		err = cmd.Wait()
-		onCmdExit(w, cmd, err)
+		onCmdExit(status, cmd, err)
 	}
 	return run
 }

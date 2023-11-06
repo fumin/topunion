@@ -1,5 +1,5 @@
 # Example usage:
-# python count.py -c='{"TrackIndex": "track/index.m3u8", "TrackDir": "track/track", "Src": "server/record/2006/20060102/20060102_150405_000000/rtsp0/index.m3u8", "AI": {"Smart": false, "Device": "cpu", "Mask": {"Enable": false}, "Yolo": {"Weights": "yolo_best.pt", "Size": 640}, "Track": {}}}'
+# python count.py -c='{"TrackIndex": "track/index.m3u8", "TrackLog": "track/track.json", "Src": "serverData/record/2006/20060102/20060102_150405_000000/rtsp0/index.m3u8", "AI": {"Smart": false, "Device": "cpu", "Mask": {"Enable": false}, "Yolo": {"Weights": "yolo_best.pt", "Size": 640}, "Track": {}}}'
 
 import argparse
 import datetime
@@ -37,22 +37,46 @@ class HandleResult:
         self.img = img
         self.track = track
 
-    def json(self):
-        d = {"Count": self.track.count}
-        return json.dumps(d)
+
+class TrackEntry:
+    def __init__(self, fpath, segment):
+        self.fpath = fpath
+        self.segment = segment
 
 
-def readHandleResult(fpath):
-    with open(fpath) as f:
+def readHandleResult(lastResult):
+    with open(lastResult.fpath) as f:
         b = f.read()
-    d = json.loads(b)
+    lines = b.split("\n")
+
+    segment = None
+    i = len(lines)
+    while True:
+        i -= 1
+        if i < 0:
+            break
+
+        err = None
+        try:
+            d = json.loads(lines[i])
+        except Exception as e:
+            err = e
+        if err:
+            logging.info(_l("error", Err=str(err)))
+            continue
+        if d["Segment"] == lastResult.segment:
+            segment = d
+            break
+
+    if not segment:
+        return HandleResult(None, TrackOutput([], [], [], -1)), f"not found {inspect.getframeinfo(inspect.currentframe())}"
 
     trackOut = TrackOutput([], [], [], d["Count"])
-    return HandleResult(None, trackOut)
+    return HandleResult(None, trackOut), None
 
 
 class Handler:
-    def __init__(self, cfg, height, width, lastResultPath):
+    def __init__(self, cfg, height, width):
         self.cfg = cfg
         dtype = np.uint8
         masker = Masker(cfg["Mask"], height, width, dtype, cfg["Device"])
@@ -76,15 +100,23 @@ class Handler:
             detector = newYolov8(cfg["Yolo"]["Weights"], cfg["Yolo"]["Size"], [[masked.shape[0], masked.shape[1]]])
             tracker = newTracker(cfg["Track"])
 
-        if lastResultPath != "":
-            lastRes = readHandleResult(lastResultPath)
-            if cfg["Smart"]:
-                tracker.prevCount = lastRes.track.count
-
         self.config = cfg
         self.masker = masker
         self.detector = detector
         self.tracker = tracker
+
+    def initLastResult(self, lastResult):
+        if lastResult.segment == "":
+            return None
+
+        lastRes, err = readHandleResult(lastResult)
+        if err:
+            return err
+
+        logging.info(_l("lastResult", Count=lastRes.track.count))
+        if self.cfg["Smart"]:
+            self.tracker.prevCount = lastRes.track.count
+        return None
 
     def afterWarmup(self):
         if self.cfg["Smart"]:
@@ -487,12 +519,11 @@ class Differ:
                 urlIdx = i
                 break
 
-        lastRes = ""
-        if urlIdx >= 0:
-            base = trackIndex[urlIdx].b
-            noext, _ = os.path.splitext(base)
-            lastRes = noext
-        return lastRes
+        if urlIdx < 0:
+            return ""
+
+        base = trackIndex[urlIdx].b
+        return base
 
     def _getWarmup(self, trackIndex: list[M3U8Line]) -> str:
         # Loop backwards and find the first previous segment.
@@ -737,7 +768,7 @@ class ProcessInfo:
         self.indexNew: list[M3U8List] = []
         self.video: VideoInfo = None
 
-        self.trackPath: str = ""
+        self.trackEntry: TrackEntry = TrackEntry("", "")
 
     def __repr__(self):
         return f"ProcessInfo {self.indexPath} {len(self.indexCurrent)} {len(self.indexNew)} {self.video}"
@@ -785,14 +816,21 @@ class ThreadQueue:
 def runBackground(qu: queue.Queue, threads: list[ThreadQueue], info: ProcessInfo):
     if info.video:
         writeVideo(info.video)
-    if info.trackPath != "":
-        last = FrameSeeker(info.video.packets).last()
-        with open(info.trackPath, "w") as f:
-            f.write(last.ai.json())
 
+    # Wait till previous segments have been processed.
+    # This is very important, as order in HLS playlist is crucial.
     for t in threads:
         if not t.wait():
             return
+
+    if info.trackEntry.fpath != "":
+        last = FrameSeeker(info.video.packets).last()
+        d = {}
+        d["Segment"] = info.trackEntry.segment
+        d["Count"] = last.ai.track.count
+        b = json.dumps(d)+"\n"
+        with open(info.trackEntry.fpath, "a") as f:
+            f.write(b)
 
     logging.info(_l("newlines", Newlines=[vars(o) for o in info.indexNew], Video=(info.video and info.video.fpath), Threads=len(threads)))
     index = info.indexCurrent
@@ -803,7 +841,7 @@ def runBackground(qu: queue.Queue, threads: list[ThreadQueue], info: ProcessInfo
     qu.put(True)
 
 
-def process(differ: Differ, trackDir: str, handler: Any, ts: list[Any]) -> tuple[ProcessInfo, Any]:
+def process(differ: Differ, trackLogPath: str, handler: Any, ts: list[Any]) -> tuple[ProcessInfo, Any]:
     newLines, err = differ.refresh()
     if err:
         return None, err
@@ -828,8 +866,7 @@ def process(differ: Differ, trackDir: str, handler: Any, ts: list[Any]) -> tuple
             info.video = handleVideo(trackVidPath, srcVidPath, handler)
 
             base = os.path.basename(srcVidPath)
-            noext, _ = os.path.splitext(base)
-            info.trackPath = os.path.join(trackDir, noext+".json")
+            info.trackEntry = TrackEntry(trackLogPath, base)
 
     return info, None
 
@@ -884,15 +921,14 @@ def mainWithErr(args):
     height, width, err = getImgSize(cfg["Src"])
     if err:
         return err
+    handler = Handler(cfg["AI"], height, width)
 
     lastRes, warmup, err = differ.init()
     if err:
         return err
-    lastHandleRes = ""
-    if lastRes != "":
-        lastHandleRes = os.path.join(cfg["TrackDir"], lastRes+".json")
-    logging.info(_l("lastResult", V=lastHandleRes))
-    handler = Handler(cfg["AI"], height, width, lastHandleRes)
+    err = handler.initLastResult(TrackEntry(cfg["TrackLog"], lastRes))
+    if err:
+        return err
 
     # Warmup the tracker, so that it does not count objects in the first frame as new objects.
     logging.info(_l("warmup", V=warmup))
@@ -907,7 +943,7 @@ def mainWithErr(args):
     while True:
         ts = [{"t": time.perf_counter()}]
 
-        info, err = process(differ, cfg["TrackDir"], handler, ts)
+        info, err = process(differ, cfg["TrackLog"], handler, ts)
         if err:
             return err
         ts.append({"name": "process", "t": time.perf_counter()})

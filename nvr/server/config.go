@@ -73,7 +73,7 @@ func startVideoFile(s *Server, fpath string) (string, error) {
 	record.RTSP = append(record.RTSP, rtsp0)
 
 	count0 := nvr.Count{Src: rtsp0.Name}
-	count0.Config.AI.Smart = false
+	count0.Config.AI.Smart = true
 	count0.Config.AI.Device = "cpu"
 	if cuda.IsAvailable() {
 		count0.Config.AI.Device = "cuda:0"
