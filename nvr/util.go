@@ -222,3 +222,60 @@ func ReadCmdMsg(fpath string) ([]CmdMsg, error) {
 	}
 	return msgs, nil
 }
+
+type ErrorLogger struct {
+	fpath string
+	f     *os.File
+}
+
+func NewErrorLogger(fpath string) *ErrorLogger {
+	el := &ErrorLogger{fpath: fpath}
+	return el
+}
+
+func (el *ErrorLogger) Close() {
+	if el.f != nil {
+		if err := el.f.Close(); err != nil {
+			log.Printf("%+v", err)
+		}
+	}
+}
+
+func (el *ErrorLogger) E(fn func() error) {
+	funcErr := fn()
+	if funcErr == nil {
+		return
+	}
+
+	writeErr := func() error {
+		msg := struct {
+			Time time.Time
+			Err  string
+		}{}
+		msg.Time = time.Now()
+		msg.Err = fmt.Sprintf("%+v", funcErr)
+		b, err := json.Marshal(msg)
+		if err != nil {
+			return errors.Wrap(err, "")
+		}
+
+		if el.f == nil {
+			f, err := os.OpenFile(el.fpath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				return errors.Wrap(err, "")
+			}
+			el.f = f
+		}
+		if _, err := el.f.Write(append(b, '\n')); err != nil {
+			return errors.Wrap(err, "")
+		}
+		if err := el.f.Sync(); err != nil {
+			return errors.Wrap(err, "")
+		}
+		return nil
+	}()
+	if writeErr != nil {
+		el.f = nil
+		log.Printf("funcErr: %+v, writeErr: %+v", funcErr, writeErr)
+	}
+}

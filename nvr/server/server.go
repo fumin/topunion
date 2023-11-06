@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/pkg/errors"
 
 	"nvr"
@@ -29,11 +32,13 @@ const (
 	PathHLSIndex    = "/HLSIndex"
 	PathVideo       = "/Video"
 	PathServe       = "/Serve"
+
+	ErrorLogFilename = "error.txt"
 )
 
 func StartRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}, error) {
-	id, err := startVideoFile(s, "sample/shilin20230826.mp4")
-	// id, err := startVideoWifi(s)
+	// id, err := startVideoFile(s, "sample/shilin20230826.mp4")
+	id, err := startVideoWifi(s)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
@@ -114,11 +119,12 @@ var recordPageTmpl = template.Must(template.New("").Parse(recordPageHTML))
 
 func RecordPage(s *Server, w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("id")
-	record, err := nvr.ReadRecord(s.RecordDir, id)
+	record, err := nvr.GetRecord(s.db, id)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("%+v", err), http.StatusInternalServerError)
 		return
 	}
+
 	rd := nvr.RecordDir(s.RecordDir, record.ID)
 	for i, rtsp := range record.RTSP {
 		indexPath := filepath.Join(rd, rtsp.Name, nvr.IndexM3U8)
@@ -164,7 +170,7 @@ func Index(s *Server, w http.ResponseWriter, r *http.Request) {
 	page.StopURL = PathStopRecord + "?" + v.Encode()
 
 	var err error
-	page.LatestRecords, err = nvr.ListRecord(s.RecordDir)
+	page.LatestRecords, err = nvr.SelectRecord(s.db, "ORDER BY createAt DESC LIMIT 30", nil)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("%+v", err), http.StatusInternalServerError)
 		return
@@ -235,6 +241,7 @@ type Server struct {
 	ScriptDir string
 	Scripts   nvr.Scripts
 
+	db        *sql.DB
 	RecordDir string
 
 	records *recordMap
@@ -253,6 +260,13 @@ func NewServer(dir, addr string) (*Server, error) {
 		return nil, errors.Wrap(err, "")
 	}
 
+	dbPath := filepath.Join(dir, "db.sqlite")
+	dbV := url.Values{}
+	dbV.Set("_journal_mode", "WAL")
+	s.db, err = sql.Open("sqlite3", "file:"+dbPath+"?"+dbV.Encode())
+	if err != nil {
+		return nil, errors.Wrap(err, "")
+	}
 	s.RecordDir = filepath.Join(dir, "record")
 	if err := os.MkdirAll(s.RecordDir, os.ModePerm); err != nil {
 		return nil, errors.Wrap(err, "")
@@ -310,7 +324,7 @@ func (s *Server) startRecord(record nvr.Record) (string, error) {
 			return "", errors.Wrap(err, fmt.Sprintf("%#v", rtsp))
 		}
 	}
-	if err := nvr.WriteRecord(s.RecordDir, record); err != nil {
+	if err := nvr.InsertRecord(s.db, record); err != nil {
 		return "", errors.Wrap(err, "")
 	}
 
@@ -323,7 +337,7 @@ func (s *Server) startRecord(record nvr.Record) (string, error) {
 		}
 
 		rr.record.Err = fmt.Sprintf("%+v", err)
-		if err := nvr.WriteRecord(s.RecordDir, rr.record); err != nil {
+		if err := nvr.Update(s.db, nvr.TableRecord, rr.record.ID, "err=?", []interface{}{rr.record.Err}); err != nil {
 			log.Printf("%+v", err)
 		}
 	}()
@@ -348,9 +362,13 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 		go func(rtsp nvr.RTSP) {
 			defer close(done)
 
+			repeat := rtsp.Repeat
+			if repeat == 0 {
+				repeat = math.MaxInt
+			}
 			dir := rtsp.Dir(recordDir)
 			fn := nvr.RecordVideoFn(dir, rtsp.GetInput)
-			for {
+			for i := 0; i < repeat; i++ {
 				fn(ctx)
 				select {
 				case <-ctx.Done():
@@ -363,7 +381,7 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 
 	// Prepare counts.
 	countDone := make([]chan struct{}, 0, len(rr.record.Count))
-	for _, c := range rr.record.Count {
+	for i, c := range rr.record.Count {
 		if err := c.Prepare(); err != nil {
 			return errors.Wrap(err, "")
 		}
@@ -371,7 +389,7 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 		srcDoneC := rtspDone[c.Src]
 		done := make(chan struct{})
 		countDone = append(countDone, done)
-		go func(c nvr.Count) {
+		go func(countID int, c nvr.Count) {
 			defer close(done)
 
 			countCtx, countCancel := context.WithCancel(context.Background())
@@ -392,23 +410,38 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 					<-time.After(time.Second)
 				}
 			}()
-
 			dir := filepath.Dir(c.Config.TrackIndex)
-			fn := nvr.CountFn(dir, s.Scripts.Count, c.Config)
+			processDone := make(chan struct{})
+			go func() {
+				defer close(processDone)
+				fn := nvr.CountFn(dir, s.Scripts.Count, c.Config)
+				for {
+					fn(countCtx)
+					select {
+					case <-countCtx.Done():
+						return
+					default:
+					}
+				}
+			}()
+			errLog := nvr.NewErrorLogger(filepath.Join(dir, ErrorLogFilename))
+			defer errLog.Close()
+		Loop:
 			for {
-				fn(countCtx)
+				errLog.E(func() error { return nvr.UpdateLastTrack(s.db, rr.record, countID) })
 				select {
-				case <-countCtx.Done():
-					return
-				default:
+				case <-processDone:
+					break Loop
+				case <-time.After(nvr.HLSTime * time.Second):
 				}
 			}
-		}(c)
+			errLog.E(func() error { return nvr.UpdateLastTrack(s.db, rr.record, countID) })
+		}(i, c)
 	}
 
 	<-ctx.Done()
 	rr.record.Stop = time.Now()
-	if err := nvr.WriteRecord(s.RecordDir, rr.record); err != nil {
+	if err := nvr.Update(s.db, nvr.TableRecord, rr.record.ID, "stop=?", []interface{}{rr.record.Stop}); err != nil {
 		return errors.Wrap(err, "")
 	}
 
@@ -416,7 +449,7 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 		<-done
 	}
 	rr.record.Cleanup = time.Now()
-	if err := nvr.WriteRecord(s.RecordDir, rr.record); err != nil {
+	if err := nvr.Update(s.db, nvr.TableRecord, rr.record.ID, "cleanup=?", []interface{}{rr.record.Cleanup}); err != nil {
 		return errors.Wrap(err, "")
 	}
 	return nil

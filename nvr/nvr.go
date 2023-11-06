@@ -24,6 +24,12 @@ const (
 	StdoutFilename = "stdout.txt"
 	StderrFilename = "stderr.txt"
 	StatusFilename = "status.txt"
+
+	TableRecord = "record"
+)
+
+var (
+	ErrNotFound = errors.Errorf("not found")
 )
 
 //go:embed count.py

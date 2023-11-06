@@ -3,17 +3,20 @@ package nvr
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"html/template"
-	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
 
 	"nvr/arp"
+	"nvr/cuda"
 )
 
 type RTSP struct {
@@ -21,6 +24,7 @@ type RTSP struct {
 	Input            []string
 	NetworkInterface string
 	MacAddress       string
+	Repeat           int
 
 	Video string `json:",omitempty"`
 }
@@ -121,7 +125,8 @@ type Count struct {
 	Src    string
 	Config CountConfig
 
-	Track      *Track `json:",omitempty"`
+	Track Track
+
 	TrackVideo string `json:",omitempty"`
 }
 
@@ -133,6 +138,12 @@ func (c Count) Fill(recordDir string) Count {
 }
 
 func (c Count) Prepare() error {
+	if strings.HasPrefix(c.Config.AI.Device, "cuda") {
+		if !cuda.IsAvailable() {
+			return errors.Errorf("no cuda")
+		}
+	}
+
 	if err := os.MkdirAll(filepath.Dir(c.Config.TrackIndex), os.ModePerm); err != nil {
 		return errors.Wrap(err, "")
 	}
@@ -187,10 +198,10 @@ func (c Count) SameIndex() error {
 	return nil
 }
 
-func (c Count) LastTrack() (*Track, error) {
+func (c Count) LastTrack() (Track, error) {
 	f, err := os.Open(c.Config.TrackLog)
 	if err != nil {
-		return nil, errors.Wrap(err, "")
+		return Track{}, errors.Wrap(err, "")
 	}
 	defer f.Close()
 
@@ -200,19 +211,32 @@ func (c Count) LastTrack() (*Track, error) {
 		lines = append(lines, scanner.Text())
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, errors.Wrap(err, "")
+		return Track{}, errors.Wrap(err, "")
 	}
 
 	if len(lines) == 0 {
-		return &Track{}, nil
+		return Track{}, nil
 	}
 
 	last := lines[len(lines)-1]
 	var track Track
 	if err := json.Unmarshal([]byte(last), &track); err != nil {
-		return nil, errors.Wrap(err, "")
+		return Track{}, errors.Wrap(err, "")
 	}
-	return &track, nil
+	return track, nil
+}
+
+func Update(db *sql.DB, table, id, columns string, values []interface{}) error {
+	sqlStr := fmt.Sprintf(`UPDATE %s
+	SET %s
+	WHERE id=?`, table, columns)
+	args := append(values, id)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := db.ExecContext(ctx, sqlStr, args...); err != nil {
+		return errors.Wrap(err, fmt.Sprintf("\"%s\"", sqlStr))
+	}
+	return nil
 }
 
 type Record struct {
@@ -225,9 +249,10 @@ type Record struct {
 	Stop    time.Time
 	Cleanup time.Time
 
-	Link       string `json:",omitempty"`
-	CreateTime string `json:",omitempty"`
-	StopTime   string `json:",omitempty"`
+	// Fields for display only.
+	Link       string
+	CreateTime string
+	StopTime   string
 }
 
 func RecordDir(root, id string) string {
@@ -237,88 +262,112 @@ func RecordDir(root, id string) string {
 	return dir
 }
 
-func WriteRecord(root string, record Record) error {
-	b, err := json.Marshal(record)
+func InsertRecord(db *sql.DB, r Record) error {
+	rtspB, err := json.Marshal(r.RTSP)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	countB, err := json.Marshal(r.Count)
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
 
-	recordDir := RecordDir(root, record.ID)
-	if err := os.MkdirAll(recordDir, os.ModePerm); err != nil {
-		return errors.Wrap(err, "")
-	}
-
-	fpath := filepath.Join(recordDir, ValueFilename)
-	if err := os.WriteFile(fpath, b, os.ModePerm); err != nil {
+	sqlStr := "INSERT INTO " + TableRecord + `
+	(id, rtsp, count, err, createAt) VALUES
+	(?,  ?,    ?,     ?,  ?)`
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := db.ExecContext(ctx, sqlStr, r.ID, rtspB, countB, r.Err, r.Create); err != nil {
 		return errors.Wrap(err, "")
 	}
 	return nil
 }
 
-func ReadRecord(root, id string) (Record, error) {
-	if len(id) < 8 {
-		return Record{}, errors.Errorf("%d", len(id))
-	}
-	fpath := filepath.Join(RecordDir(root, id), ValueFilename)
-	b, err := os.ReadFile(fpath)
+func UpdateLastTrack(db *sql.DB, record Record, countID int) error {
+	track, err := record.Count[countID].LastTrack()
 	if err != nil {
-		return Record{}, errors.Wrap(err, "")
-	}
-	var record Record
-	if err := json.Unmarshal(b, &record); err != nil {
-		return Record{}, errors.Wrap(err, "")
-	}
-	return record, nil
-}
-
-func cleanup(root, id string) error {
-	t, err := TimeParse(id)
-	if err == nil && t.Before(time.Now().AddDate(0, 0, -1)) {
-		return nil
+		return errors.Wrap(err, "")
 	}
 
-	dir := RecordDir(root, id)
-	log.Printf("cleaning up %s", dir)
-	if err := os.RemoveAll(dir); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	defer tx.Rollback()
+
+	// Read track.
+	sqlStr := `SELECT count FROM ` + TableRecord + ` WHERE id=?`
+	var countB []byte
+	if err := tx.QueryRowContext(ctx, sqlStr, record.ID).Scan(&countB); err != nil {
+		return errors.Wrap(err, "")
+	}
+	if err := json.Unmarshal(countB, &record.Count); err != nil {
+		return errors.Wrap(err, "")
+	}
+
+	// Update track.
+	if !(countID >= 0 && countID < len(record.Count)) {
+		return errors.Errorf("%d %d %#v", countID, len(record.Count), record.Count)
+	}
+	record.Count[countID].Track = track
+
+	// Save track.
+	updatedB, err := json.Marshal(record.Count)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	sqlStr = `UPDATE ` + TableRecord + ` SET count=? WHERE id=?`
+	if _, err := db.ExecContext(ctx, sqlStr, updatedB, record.ID); err != nil {
+		return errors.Wrap(err, "")
+	}
+
+	// Commit.
+	if err := tx.Commit(); err != nil {
 		return errors.Wrap(err, "")
 	}
 	return nil
 }
 
-func ListRecord(root string) ([]Record, error) {
-	limit := 30
-	records := make([]Record, 0)
-	years, err := os.ReadDir(root)
+func GetRecord(db *sql.DB, id string) (Record, error) {
+	records, err := SelectRecord(db, "WHERE id=?", []interface{}{id})
+	if err != nil {
+		return Record{}, errors.Wrap(err, "")
+	}
+	if len(records) == 0 {
+		return Record{}, ErrNotFound
+	}
+	return records[0], nil
+}
+
+func SelectRecord(db *sql.DB, constraint string, args []interface{}) ([]Record, error) {
+	sqlStr := `SELECT id, rtsp, count, err, createAt, stop, cleanup, track FROM ` + TableRecord + " " + constraint
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rows, err := db.QueryContext(ctx, sqlStr, args...)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
-Loop:
-	for i := len(years) - 1; i >= 0; i-- {
-		year := years[i].Name()
-		days, err := os.ReadDir(filepath.Join(root, year))
-		if err != nil {
-			return nil, errors.Wrap(err, fmt.Sprintf("\"%s\"", year))
-		}
-		for j := len(days) - 1; j >= 0; j-- {
-			day := days[j].Name()
-			ids, err := os.ReadDir(filepath.Join(root, year, day))
-			if err != nil {
-				return nil, errors.Wrap(err, fmt.Sprintf("%s %s", year, day))
-			}
-			for k := len(ids) - 1; k >= 0; k-- {
-				id := ids[k].Name()
-				r, err := ReadRecord(root, id)
-				if err != nil {
-					cleanup(root, id)
-					continue
-				}
-				records = append(records, r)
-				if len(records) >= limit {
-					break Loop
-				}
-			}
-		}
-	}
+	defer rows.Close()
 
+	records := make([]Record, 0)
+	for rows.Next() {
+		var r Record
+		var rtspB, countB, trackB []byte
+		if err := rows.Scan(&r.ID, &rtspB, &countB, &r.Err, &r.Create, &r.Stop, &r.Cleanup, &trackB); err != nil {
+			return nil, errors.Wrap(err, "")
+		}
+		if err := json.Unmarshal(rtspB, &r.RTSP); err != nil {
+			return nil, errors.Wrap(err, fmt.Sprintf("%s", rtspB))
+		}
+		if err := json.Unmarshal(countB, &r.Count); err != nil {
+			return nil, errors.Wrap(err, fmt.Sprintf("%s", countB))
+		}
+		records = append(records, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.Wrap(err, "")
+	}
 	return records, nil
 }
