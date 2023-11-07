@@ -273,11 +273,11 @@ func InsertRecord(db *sql.DB, r Record) error {
 	}
 
 	sqlStr := "INSERT INTO " + TableRecord + `
-	(id, rtsp, count, err, createAt) VALUES
-	(?,  ?,    ?,     ?,  ?)`
+	(id, rtsp, count, err, createAt, stop, cleanup) VALUES
+	(?,  ?,    ?,     ?,  ?,         ?,    ?)`
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := db.ExecContext(ctx, sqlStr, r.ID, rtspB, countB, r.Err, r.Create); err != nil {
+	if _, err := db.ExecContext(ctx, sqlStr, r.ID, rtspB, countB, r.Err, r.Create, r.Stop, r.Cleanup); err != nil {
 		return errors.Wrap(err, "")
 	}
 	return nil
@@ -342,7 +342,7 @@ func GetRecord(db *sql.DB, id string) (Record, error) {
 }
 
 func SelectRecord(db *sql.DB, constraint string, args []interface{}) ([]Record, error) {
-	sqlStr := `SELECT id, rtsp, count, err, createAt, stop, cleanup, track FROM ` + TableRecord + " " + constraint
+	sqlStr := `SELECT id, rtsp, count, err, createAt, stop, cleanup FROM ` + TableRecord + " " + constraint
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	rows, err := db.QueryContext(ctx, sqlStr, args...)
@@ -354,8 +354,8 @@ func SelectRecord(db *sql.DB, constraint string, args []interface{}) ([]Record, 
 	records := make([]Record, 0)
 	for rows.Next() {
 		var r Record
-		var rtspB, countB, trackB []byte
-		if err := rows.Scan(&r.ID, &rtspB, &countB, &r.Err, &r.Create, &r.Stop, &r.Cleanup, &trackB); err != nil {
+		var rtspB, countB []byte
+		if err := rows.Scan(&r.ID, &rtspB, &countB, &r.Err, &r.Create, &r.Stop, &r.Cleanup); err != nil {
 			return nil, errors.Wrap(err, "")
 		}
 		if err := json.Unmarshal(rtspB, &r.RTSP); err != nil {

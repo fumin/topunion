@@ -378,6 +378,13 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 			}
 		}(rtsp)
 	}
+	allRTSPDone := make(chan struct{})
+	go func() {
+		defer close(allRTSPDone)
+		for _, c := range rtspDone {
+			<-c
+		}
+	}()
 
 	// Prepare counts.
 	countDone := make([]chan struct{}, 0, len(rr.record.Count))
@@ -439,7 +446,10 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 		}(i, c)
 	}
 
-	<-ctx.Done()
+	select {
+	case <-ctx.Done():
+	case <-allRTSPDone:
+	}
 	rr.record.Stop = time.Now()
 	if err := nvr.Update(s.db, nvr.TableRecord, rr.record.ID, "stop=?", []interface{}{rr.record.Stop}); err != nil {
 		return errors.Wrap(err, "")

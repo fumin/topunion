@@ -2,8 +2,10 @@ package nvr
 
 import (
 	"context"
+	"database/sql"
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -166,4 +168,25 @@ func RecordVideoFn(dir string, getInput func() ([]string, error)) func(context.C
 		return cmd, nil
 	}
 	return newCmdFn(dir, run)
+}
+
+func CreateTables(db *sql.DB) error {
+	sqlStrs := []string{
+		"CREATE TABLE " + TableRecord + ` (
+                        id text PRIMARY KEY,
+                        rtsp text,
+                        count text,
+                        err text,
+                        createAt datetime,
+                        stop datetime,
+                        cleanup datetime);`,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, sqlStr := range sqlStrs {
+		if _, err := db.ExecContext(ctx, sqlStr); err != nil {
+			return errors.Wrap(err, fmt.Sprintf("\"%s\"", sqlStr))
+		}
+	}
+	return nil
 }

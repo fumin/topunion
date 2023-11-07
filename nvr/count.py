@@ -826,6 +826,7 @@ def runBackground(qu: queue.Queue, threads: list[ThreadQueue], info: ProcessInfo
     if info.trackEntry.fpath != "":
         last = FrameSeeker(info.video.packets).last()
         d = {}
+        d["T"] = datetime.datetime.utcnow().isoformat()+"Z"
         d["Segment"] = info.trackEntry.segment
         d["Count"] = last.ai.track.count
         b = json.dumps(d)+"\n"

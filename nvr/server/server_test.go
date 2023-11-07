@@ -1,9 +1,6 @@
 package server
 
 import (
-	"context"
-	"database/sql"
-	"fmt"
 	"math"
 	"nvr/cuda"
 	"os"
@@ -33,13 +30,13 @@ func TestEgg(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	if err := createTables(s.db); err != nil {
+	if err := nvr.CreateTables(s.db); err != nil {
 		t.Fatalf("%+v", err)
 	}
 
 	var record nvr.Record
-	video := filepath.Join("sample", "shilin20230826.mp4")
-	rtsp0 := nvr.RTSP{Name: "rtsp0", Input: []string{video}, Repeat: 1}
+	video := filepath.Join("../", "sample", "shilin20230826.mp4")
+	rtsp0 := nvr.RTSP{Name: "rtsp0", Input: []string{video}, Repeat: 2}
 	record.RTSP = append(record.RTSP, rtsp0)
 
 	count0 := nvr.Count{Src: rtsp0.Name}
@@ -52,7 +49,7 @@ func TestEgg(t *testing.T) {
 	count0.Config.AI.Mask.Mask.Slope = 10
 	count0.Config.AI.Mask.Mask.Y = 500
 	count0.Config.AI.Mask.Mask.H = 200
-	count0.Config.AI.Yolo.Weights = "yolo_best.pt"
+	count0.Config.AI.Yolo.Weights = filepath.Join("../", "yolo_best.pt")
 	count0.Config.AI.Yolo.Size = 640
 	record.Count = append(record.Count, count0)
 
@@ -67,7 +64,7 @@ func TestEgg(t *testing.T) {
 		r, err := nvr.GetRecord(s.db, id)
 		if err == nil {
 			t := r.Count[0].Track
-			if len(tracks) > 0 && tracks[len(tracks)-1] != t {
+			if len(tracks) == 0 || tracks[len(tracks)-1] != t {
 				tracks = append(tracks, t)
 			}
 		}
@@ -78,13 +75,13 @@ func TestEgg(t *testing.T) {
 	}
 
 	// Check track history is correct.
-	if len(tracks) < 2 {
+	if !(len(tracks) > 1) {
 		t.Fatalf("%#v", tracks)
 	}
-	if tracks[(len(tracks)-1)/2].Count >= tracks[len(tracks)-1].Count {
+	if !(tracks[(len(tracks)-1)/2].Count < tracks[len(tracks)-1].Count) {
 		t.Fatalf("%#v", tracks)
 	}
-	if tracks[len(tracks)-1].Count != 98 {
+	if tracks[len(tracks)-1].Count != 49*rtsp0.Repeat {
 		t.Fatalf("%#v", tracks)
 	}
 }
@@ -105,7 +102,7 @@ func TestStartRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	if err := createTables(s.db); err != nil {
+	if err := nvr.CreateTables(s.db); err != nil {
 		t.Fatalf("%+v", err)
 	}
 
@@ -192,26 +189,4 @@ func TestStartRecord(t *testing.T) {
 			t.Fatalf("%+v", m)
 		}
 	}
-}
-
-func createTables(db *sql.DB) error {
-	sqlStrs := []string{
-		`CREATE TABLE record (
-			id text PRIMARY KEY,
-			rtsp text,
-			count text,
-			err text,
-			createAt datetime,
-			stop datetime,
-			cleanup datetime,
-			track text);`,
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	for _, sqlStr := range sqlStrs {
-		if _, err := db.ExecContext(ctx, sqlStr); err != nil {
-			return errors.Wrap(err, fmt.Sprintf("\"%s\"", sqlStr))
-		}
-	}
-	return nil
 }

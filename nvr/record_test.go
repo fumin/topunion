@@ -2,6 +2,7 @@ package nvr
 
 import (
 	"context"
+	"database/sql"
 	"nvr/cuda"
 	"os"
 	"os/exec"
@@ -9,7 +10,45 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
+
+func TestInsertRecord(t *testing.T) {
+	t.Parallel()
+	dir, err := os.MkdirTemp("", "")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	defer os.RemoveAll(dir)
+	dbPath := filepath.Join(dir, "db.sqlite")
+	db, err := sql.Open("sqlite3", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	defer db.Close()
+	if err := CreateTables(db); err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	r := Record{ID: "abc", Create: time.Now()}
+	if err := InsertRecord(db, r); err != nil {
+		t.Fatalf("%+v", err)
+	}
+	readR, err := GetRecord(db, r.ID)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	if readR.ID != r.ID {
+		t.Fatalf("%#v %#v", readR, r)
+	}
+	if readR.Create.UnixNano() != r.Create.UnixNano() {
+		t.Fatalf("%#v %#v", readR, r)
+	}
+	if readR.Stop.UnixNano() != r.Stop.UnixNano() {
+		t.Fatalf("%#v %#v", readR, r)
+	}
+}
 
 func TestSameIndex(t *testing.T) {
 	t.Parallel()
