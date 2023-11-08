@@ -26,20 +26,25 @@ type RTSP struct {
 	MacAddress       string
 	Repeat           int
 
+	// MulticastPort is the multicast port of the live stream.
+	MulticastPort int `json:",omitempty"`
+	// Multicast is the link to the live stream.
+	Multicast string `json:",omitempty"`
+	// Video is the link to the saved video.
 	Video string `json:",omitempty"`
 }
 
-func (info RTSP) GetInput() ([]string, error) {
+func (info RTSP) GetInput() ([]string, int, error) {
 	var err error
 	for i := 0; i < 10; i++ {
 		var input []string
 		input, err = info.getInput()
 		if err == nil {
-			return input, nil
+			return input, info.MulticastPort, nil
 		}
 		<-time.After(500 * time.Millisecond)
 	}
-	return nil, err
+	return nil, -1, err
 }
 
 func (info RTSP) getInput() ([]string, error) {
@@ -102,7 +107,7 @@ func fixFFProbeArg(input []string) []string {
 }
 
 func (rtsp RTSP) Prepare(recordDir string) error {
-	input, err := rtsp.GetInput()
+	input, _, err := rtsp.GetInput()
 	if err != nil {
 		return errors.Wrap(err, "")
 	}

@@ -5,16 +5,18 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,16 +31,20 @@ const (
 	PathStartRecord = "/StartRecord"
 	PathStopRecord  = "/StopRecord"
 	PathRecordPage  = "/RecordPage"
+	PathMPEGTSServe = "/MPEGTSServe"
+	PathMPEGTS      = "/MPEGTS"
 	PathHLSIndex    = "/HLSIndex"
 	PathVideo       = "/Video"
 	PathServe       = "/Serve"
 
 	ErrorLogFilename = "error.txt"
+
+	LoopbackInterface = "lo0"
 )
 
 func StartRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}, error) {
-	// id, err := startVideoFile(s, "sample/shilin20230826.mp4")
-	id, err := startVideoWifi(s)
+	id, err := startVideoFile(s, "sample/shilin20230826.mp4")
+	// id, err := startVideoWifi(s)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
@@ -61,6 +67,63 @@ func StopRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{},
 		return nil, errors.Wrap(err, fmt.Sprintf("\"%s\"", id))
 	}
 	return struct{}{}, nil
+}
+
+//go:embed mpegts.html
+var mpegtsHTML string
+var mpegtsTmpl = template.Must(template.New("").Parse(mpegtsHTML))
+
+func MPEGTS(s *Server, w http.ResponseWriter, r *http.Request) {
+	page := struct {
+		URL string
+	}{}
+
+	v := url.Values{}
+	v.Set("a", r.FormValue("a"))
+	page.URL = PathMPEGTSServe + "?" + v.Encode()
+
+	mpegtsTmpl.Execute(w, page)
+}
+
+func MPEGTSServe(s *Server, w http.ResponseWriter, r *http.Request) {
+	addrStr := r.FormValue("a")
+	addr, err := net.ResolveUDPAddr("udp", addrStr)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	ifi, err := net.InterfaceByName(LoopbackInterface)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+
+	conn, err := net.ListenMulticastUDP("udp", ifi, addr)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close()
+
+	// Cannot use io.CopyBuffer, since it does not use our provided buffer.
+	// This is because conn implements WriterTo, which io.CopyBuffer directly uses.
+	// The buffer size nvr.VLCUDPLen should match the source or else there will be conn.Read errors.
+	b := make([]byte, nvr.VLCUDPLen)
+	prev := time.Now()
+	for {
+		if err := conn.SetReadDeadline(time.Now().Add(15 * time.Second)); err != nil {
+			break
+		}
+		n, err := conn.Read(b)
+		if err != nil {
+			break
+		}
+		if _, err := w.Write(b[:n]); err != nil {
+			break
+		}
+	}
 }
 
 func HLSIndex(s *Server, w http.ResponseWriter, r *http.Request) {
@@ -129,13 +192,15 @@ func RecordPage(s *Server, w http.ResponseWriter, r *http.Request) {
 	for i, rtsp := range record.RTSP {
 		indexPath := filepath.Join(rd, rtsp.Name, nvr.IndexM3U8)
 		record.RTSP[i].Video = s.videoURL(indexPath)
+
+		rr, ok := s.records.get(record.ID)
+		if ok {
+			v := url.Values{}
+			v.Set("a", nvr.MulticastIP+":"+strconv.Itoa(rr.record.RTSP[i].MulticastPort))
+			record.RTSP[i].Multicast = PathMPEGTS + "?" + v.Encode()
+		}
 	}
 	for i, c := range record.Count {
-		record.Count[i].Track, err = c.LastTrack()
-		if err != nil {
-			http.Error(w, fmt.Sprintf("%+v", err), http.StatusInternalServerError)
-			return
-		}
 		record.Count[i].TrackVideo = s.videoURL(c.Config.TrackIndex)
 	}
 	if err := recordPageTmpl.Execute(w, record); err != nil {
@@ -205,6 +270,12 @@ func newRecordMap() *recordMap {
 func (m *recordMap) set(rr *runningRecord) {
 	m.Lock()
 	defer m.Unlock()
+
+	ports := m.unusedPorts(len(rr.record.RTSP))
+	for i, port := range ports {
+		rr.record.RTSP[i].MulticastPort = port
+	}
+
 	if _, ok := m.m[rr.record.ID]; ok {
 		panic(fmt.Sprintf("%#v", m))
 	}
@@ -234,6 +305,59 @@ func (m *recordMap) all() []*runningRecord {
 	return all
 }
 
+func (m *recordMap) unusedPorts(n int) []int {
+	used := make(map[int]struct{})
+	for _, rr := range m.m {
+		for _, rtsp := range rr.record.RTSP {
+			used[rtsp.MulticastPort] = struct{}{}
+		}
+	}
+	usedKernel := usedKernelPorts()
+
+	unused := make([]int, 0, n)
+	for i := 10000; i < 65535; i++ {
+		if _, ok := used[i]; ok {
+			continue
+		}
+		if _, ok := usedKernel[i]; ok {
+			continue
+		}
+		unused = append(unused, i)
+		if len(unused) == n {
+			break
+		}
+	}
+	if len(unused) != n {
+		log.Fatalf("%#v %#v", unused, m.m)
+	}
+	return unused
+}
+
+func usedKernelPorts() map[int]struct{} {
+	m := make(map[int]struct{})
+	ifi, err := net.InterfaceByName(LoopbackInterface)
+	if err != nil {
+		return m
+	}
+	addrs, err := ifi.MulticastAddrs()
+	if err != nil {
+		return m
+	}
+	for _, addr := range addrs {
+		ipPort := strings.Split(addr.String(), ":")
+		if len(ipPort) != 2 {
+			continue
+		}
+		port, err := strconv.Atoi(ipPort[1])
+		if err != nil {
+			continue
+		}
+
+		m[port] = struct{}{}
+	}
+	return m
+}
+
 type Server struct {
 	ServeMux *http.ServeMux
 	Server   http.Server
@@ -246,6 +370,9 @@ type Server struct {
 
 	records *recordMap
 }
+
+//go:embed static
+var staticFS embed.FS
 
 func NewServer(dir, addr string) (*Server, error) {
 	s := &Server{}
@@ -267,6 +394,9 @@ func NewServer(dir, addr string) (*Server, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
+	// Ignore errors in nvr.CreateTables, since it likely means tables have already been prepared.
+	nvr.CreateTables(s.db)
+
 	s.RecordDir = filepath.Join(dir, "record")
 	if err := os.MkdirAll(s.RecordDir, os.ModePerm); err != nil {
 		return nil, errors.Wrap(err, "")
@@ -277,9 +407,12 @@ func NewServer(dir, addr string) (*Server, error) {
 	handleJSON(s, PathStartRecord, StartRecord)
 	handleJSON(s, PathStopRecord, StopRecord)
 	handleFunc(s, PathRecordPage, RecordPage)
+	handleFunc(s, PathMPEGTSServe, MPEGTSServe)
+	handleFunc(s, PathMPEGTS, MPEGTS)
 	handleFunc(s, PathHLSIndex, HLSIndex)
 	handleFunc(s, PathVideo, Video)
 	handleFunc(s, PathServe, Serve)
+	s.ServeMux.Handle("/static/", http.FileServer(http.FS(staticFS)))
 	handleFunc(s, "/", Index)
 
 	return s, nil

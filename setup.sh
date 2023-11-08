@@ -148,6 +148,11 @@ subnet ${ETHERNET_PREFIX}.0 netmask 255.255.255.0 {
 EOM
 systemctl restart isc-dhcp-server.service
 
+# Confine multicast to loopback.
+ip route add 239.0.0.0/24 dev lo0
+# Mac OSX
+# route -n add -net 239.0.0.0/24 -iface lo0
+
 apt install -y python-is-python3 python3-pip sqlite3 ffmpeg xclip v4l-utils net-tools arp-scan iw curl tree
 snap install wps-office
 

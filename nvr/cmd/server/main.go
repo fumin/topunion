@@ -13,6 +13,7 @@ import (
 )
 
 var (
+	addr      = flag.String("a", ":8080", "address to listen")
 	serverDir = flag.String("d", "serverData", "server directory")
 )
 
@@ -43,8 +44,7 @@ func main() {
 }
 
 func mainWithErr() error {
-	addr := ":8080"
-	s, err := server.NewServer(*serverDir, addr)
+	s, err := server.NewServer(*serverDir, *addr)
 	if err != nil {
 		return errors.Wrap(err, "")
 	}

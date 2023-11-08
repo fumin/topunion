@@ -3,7 +3,6 @@ package server
 import (
 	"nvr"
 	"nvr/cuda"
-	"time"
 
 	"github.com/pkg/errors"
 )
@@ -93,10 +92,5 @@ func startVideoFile(s *Server, fpath string) (string, error) {
 	if err != nil {
 		return "", errors.Wrap(err, "")
 	}
-	go func() {
-		<-time.After((1*60 + 3) * time.Second)
-		s.stopRecord(id)
-	}()
-
 	return id, nil
 }

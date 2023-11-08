@@ -12,6 +12,7 @@
 		<div>Link: {{.Input}}</div>
 		<div>Network interface: {{.NetworkInterface}}</div>
 		<div>Mac address: {{.MacAddress}}</div>
+		{{if .Multicast}}<a href="{{.Multicast}}">Live</a>{{end}}
 		<a href="{{.Video}}">Video</a>
 	</div>
 	{{end}}

@@ -11,17 +11,20 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
 )
 
 const (
-	IndexM3U8     = "index.m3u8"
-	ValueFilename = "v.json"
-	HLSTime       = 10
+	IndexM3U8 = "index.m3u8"
+	HLSTime   = 10
 
-	Python = "python3"
+	Python      = "python3"
+	MulticastIP = "239.0.0.1"
+	// VLCUDPLen is the UDP packet length required by the VLC player.
+	VLCUDPLen = 1316
 
 	StdoutFilename = "stdout.txt"
 	StderrFilename = "stderr.txt"
@@ -112,7 +115,7 @@ func CountFn(dir, script string, cfg CountConfig) func(context.Context) {
 	return newCmdFn(dir, run)
 }
 
-func RecordVideoFn(dir string, getInput func() ([]string, error)) func(context.Context) {
+func RecordVideoFn(dir string, getInput func() ([]string, int, error)) func(context.Context) {
 	const program = "ffmpeg"
 	const hlsFlags = "" +
 		// Append to the same HLS index file.
@@ -123,7 +126,7 @@ func RecordVideoFn(dir string, getInput func() ([]string, error)) func(context.C
 		// If we do not, with append_list turned on, ffmpeg will nonetheless insist on adding garbage program time, resulting in a worse situation.
 		"+program_date_time"
 	run := func(ctx context.Context, stdout, stderr *os.File) (*exec.Cmd, error) {
-		input, err := getInput()
+		input, multicastPort, err := getInput()
 		if err != nil {
 			return nil, errors.Wrap(err, "")
 		}
@@ -134,24 +137,31 @@ func RecordVideoFn(dir string, getInput func() ([]string, error)) func(context.C
 			segmentFName = filepath.Join(dir, "%Y%m%d_%H%M%S_%%06d.ts")
 		}
 		indexFName := filepath.Join(dir, IndexM3U8)
+		teeHLS := "[" + strings.Join([]string{
+			"f=hls",
+			// 10 seconds per segment.
+			"hls_time=" + strconv.Itoa(HLSTime),
+			// No limit on number of segments.
+			"hls_list_size=0",
+			// Use strftime syntax for segment filenames.
+			"strftime=1",
+			"hls_flags=" + hlsFlags,
+			"hls_segment_filename=" + segmentFName,
+		}, ":") + "]" + indexFName
+		teeUDP := fmt.Sprintf("[f=mpegts]udp://%s:%d/?pkt_size=%d", MulticastIP, multicastPort, VLCUDPLen)
 		arg := append(input, []string{
 			// No audio.
 			"-an",
 			// Variable frame rate, otherwise the HLS codec fails.
-			"-vsync", "vfr",
+			// "-vsync", "vfr", // for old versions of ffmpeg
+			// "-fps_mode:v:0", "vfr",
+			// Use H254 encoding.
+			"-c:v", "libx264",
 			// H264 high profile level 4.2 for maximum support across devices.
 			"-profile:v", "high", "-level:v", "4.2",
-			// 10 seconds per segment.
-			"-hls_time", strconv.Itoa(HLSTime),
-			// No limit on number of segments.
-			"-hls_list_size", "0",
-			// Use strftime syntax for segment filenames.
-			"-strftime", "1",
-			"-hls_flags", hlsFlags,
-			"-hls_segment_filename", segmentFName,
-			indexFName,
+			// Tee multiple outputs.
+			"-f", "tee", "-map", "0:v", teeHLS + "|" + teeUDP,
 		}...)
-
 		cmd := exec.CommandContext(ctx, program, arg...)
 		stdin, err := cmd.StdinPipe()
 		if err != nil {

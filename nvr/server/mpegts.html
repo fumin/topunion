@@ -1,0 +1,41 @@
+<head>
+	<script src="/static/mpegts.js"></script>
+</head>
+<body>
+<video id="video" controls mute autoplay style="max-width: 100%; max-height: 98vh;"></video>
+<script>
+var page = {{.}};
+
+if (mpegts.getFeatureList().mseLivePlayback) {
+	let player = mpegts.createPlayer({
+		type: "mpegts",
+		isLive: true,
+		url: page.URL,
+	});
+	player.on(mpegts.Events.ERROR, function(errType, errDetail, err){
+		console.log(errType, errDetail, err);
+		if (errType == mpegts.ErrorTypes.MEDIA_ERROR) {
+			player.pause();
+			player.unload();
+			player.detachMediaElement();
+
+			let videoElement = document.getElementById("video");
+			player.attachMediaElement(videoElement);
+			player.load();
+			player.play();
+		} else {
+			let secs = 1;
+			setTimeout(function(){
+			        window.location.reload();
+			}, secs*1000);
+		}
+	});
+	let videoElement = document.getElementById("video");
+	player.attachMediaElement(videoElement);
+	player.load();
+	player.play();
+} else {
+	alert("browser not supported");
+}
+</script>
+</body>
