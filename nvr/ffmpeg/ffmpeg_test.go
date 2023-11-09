@@ -1,4 +1,4 @@
-package nvr
+package ffmpeg
 
 import (
 	"math"

@@ -152,6 +152,8 @@ systemctl restart isc-dhcp-server.service
 ip route add 239.0.0.0/24 dev lo0
 # Mac OSX
 # route -n add -net 239.0.0.0/24 -iface lo0
+# Windows
+# route add 239.0.0.0 MASK 255.255.255.0 127.0.0.1
 
 apt install -y python-is-python3 python3-pip sqlite3 ffmpeg xclip v4l-utils net-tools arp-scan iw curl tree
 snap install wps-office

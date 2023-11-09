@@ -17,6 +17,8 @@ import (
 
 	"nvr/arp"
 	"nvr/cuda"
+	"nvr/ffmpeg"
+	"nvr/util"
 )
 
 type RTSP struct {
@@ -26,25 +28,25 @@ type RTSP struct {
 	MacAddress       string
 	Repeat           int
 
-	// MulticastPort is the multicast port of the live stream.
-	MulticastPort int `json:",omitempty"`
-	// Multicast is the link to the live stream.
+	// Multicast is the multicast address of the live stream.
 	Multicast string `json:",omitempty"`
-	// Video is the link to the saved video.
+	// MPEGTS is the HTTP link to the MPEGTS stream.
+	MPEGTS string `json:",omitempty"`
+	// Video is the HTTP link to the saved video.
 	Video string `json:",omitempty"`
 }
 
-func (info RTSP) GetInput() ([]string, int, error) {
+func (info RTSP) GetInput() ([]string, string, error) {
 	var err error
 	for i := 0; i < 10; i++ {
 		var input []string
 		input, err = info.getInput()
 		if err == nil {
-			return input, info.MulticastPort, nil
+			return input, info.Multicast, nil
 		}
 		<-time.After(500 * time.Millisecond)
 	}
-	return nil, -1, err
+	return nil, "", err
 }
 
 func (info RTSP) getInput() ([]string, error) {
@@ -111,7 +113,7 @@ func (rtsp RTSP) Prepare(recordDir string) error {
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
-	if _, err := FFProbe(fixFFProbeArg(input)); err != nil {
+	if _, err := ffmpeg.FFProbe(fixFFProbeArg(input)); err != nil {
 		return errors.Wrap(err, "")
 	}
 
@@ -341,7 +343,7 @@ func GetRecord(db *sql.DB, id string) (Record, error) {
 		return Record{}, errors.Wrap(err, "")
 	}
 	if len(records) == 0 {
-		return Record{}, ErrNotFound
+		return Record{}, util.ErrNotFound
 	}
 	return records[0], nil
 }

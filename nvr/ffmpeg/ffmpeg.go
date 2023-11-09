@@ -1,4 +1,4 @@
-package nvr
+package ffmpeg
 
 import (
 	"bytes"
@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/pkg/errors"
 )
@@ -40,4 +41,19 @@ func FFProbe(input []string) (ProbeOutput, error) {
 	// Live streams may not have duration, so ignore errors.
 	out.Format.Duration, _ = strconv.ParseFloat(out.Format.DurationStr, 64)
 	return out, nil
+}
+
+// Escape escapes ffmpeg strings.
+// https://ffmpeg.org/ffmpeg-utils.html#quoting_005fand_005fescaping
+func Escape(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return s
+}
+
+// TeeEscape escapes strings inside a tee muxer option.
+// https://ffmpeg.org/ffmpeg-formats.html#Options-17
+func TeeEscape(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, ":", `\:`)
+	return s
 }

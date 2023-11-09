@@ -2,7 +2,6 @@ package server
 
 import (
 	"math"
-	"nvr/cuda"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,9 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"nvr"
-
 	"github.com/pkg/errors"
+
+	"nvr"
+	"nvr/cuda"
+	"nvr/ffmpeg"
+	"nvr/util"
 )
 
 func TestEgg(t *testing.T) {
@@ -30,7 +32,7 @@ func TestEgg(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	if err := nvr.CreateTables(s.db); err != nil {
+	if err := nvr.CreateTables(s.DB); err != nil {
 		t.Fatalf("%+v", err)
 	}
 
@@ -61,7 +63,7 @@ func TestEgg(t *testing.T) {
 	// Collect tracks.
 	tracks := make([]nvr.Track, 0)
 	for {
-		r, err := nvr.GetRecord(s.db, id)
+		r, err := nvr.GetRecord(s.DB, id)
 		if err == nil {
 			t := r.Count[0].Track
 			if len(tracks) == 0 || tracks[len(tracks)-1] != t {
@@ -102,11 +104,11 @@ func TestStartRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	if err := nvr.CreateTables(s.db); err != nil {
+	if err := nvr.CreateTables(s.DB); err != nil {
 		t.Fatalf("%+v", err)
 	}
 
-	record := nvr.Record{ID: nvr.TimeFormat(time.Now())}
+	record := nvr.Record{ID: util.TimeFormat(time.Now())}
 	rtsp0 := nvr.RTSP{
 		Name:  "testVid",
 		Input: []string{"-stream_loop", "-1", "-re", "-i", testVid},
@@ -128,7 +130,7 @@ func TestStartRecord(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 
-	var videoSecs float64 = 2
+	var videoSecs float64 = 10
 	<-time.After(time.Duration(videoSecs*1e9) * time.Nanosecond)
 
 	if err := s.stopRecord(id); err != nil {
@@ -138,17 +140,14 @@ func TestStartRecord(t *testing.T) {
 	var readRecord nvr.Record
 	for i := 0; ; i++ {
 		readRecord, err = func() (nvr.Record, error) {
-			records, err := nvr.SelectRecord(s.db, "WHERE id=?", []interface{}{id})
+			r, err := nvr.GetRecord(s.DB, id)
 			if err != nil {
 				return nvr.Record{}, errors.Wrap(err, "")
 			}
-			if len(records) == 0 {
-				return nvr.Record{}, errors.Errorf("not found")
+			if r.Cleanup.IsZero() {
+				return nvr.Record{}, errors.Errorf("zero %#v", r)
 			}
-			if records[0].Cleanup.IsZero() {
-				return nvr.Record{}, errors.Errorf("zero %#v", records[0])
-			}
-			return records[0], nil
+			return r, nil
 		}()
 		if err == nil || i > 30 {
 			break
@@ -156,26 +155,26 @@ func TestStartRecord(t *testing.T) {
 		<-time.After(time.Second)
 	}
 	if err != nil {
-		b, _ := os.ReadFile(filepath.Join(filepath.Dir(record.Count[0].Config.TrackIndex), nvr.StderrFilename))
+		b, _ := os.ReadFile(filepath.Join(filepath.Dir(record.Count[0].Config.TrackIndex), util.StderrFilename))
 		t.Logf("%s", b)
 		t.Fatalf("%+v", err)
 	}
 
 	// Check video output.
-	probe, err := nvr.FFProbe([]string{"-i", readRecord.Count[0].Config.TrackIndex})
+	probe, err := ffmpeg.FFProbe([]string{"-i", readRecord.Count[0].Config.TrackIndex})
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	if math.Abs(probe.Format.Duration-videoSecs) > 0.1 {
+	if math.Abs(probe.Format.Duration/videoSecs-1) > 0.1 {
 		t.Fatalf("%#v", probe)
 	}
 
 	// Check child processes exited with exit code 0.
-	msgs, err := nvr.ReadCmdMsg(filepath.Join(filepath.Dir(readRecord.Count[0].Config.TrackIndex), nvr.StatusFilename))
+	msgs, err := util.ReadCmdMsg(filepath.Join(filepath.Dir(readRecord.Count[0].Config.TrackIndex), util.StatusFilename))
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	exits := make([]nvr.CmdMsg, 0)
+	exits := make([]util.CmdMsg, 0)
 	for _, m := range msgs {
 		if m.ExitCode != nil {
 			exits = append(exits, m)

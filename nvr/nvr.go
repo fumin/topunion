@@ -15,26 +15,18 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+
+	"nvr/ffmpeg"
+	"nvr/util"
 )
 
 const (
 	IndexM3U8 = "index.m3u8"
 	HLSTime   = 10
 
-	Python      = "python3"
-	MulticastIP = "239.0.0.1"
-	// VLCUDPLen is the UDP packet length required by the VLC player.
-	VLCUDPLen = 1316
-
-	StdoutFilename = "stdout.txt"
-	StderrFilename = "stderr.txt"
-	StatusFilename = "status.txt"
+	Python = "python3"
 
 	TableRecord = "record"
-)
-
-var (
-	ErrNotFound = errors.Errorf("not found")
 )
 
 //go:embed count.py
@@ -112,10 +104,10 @@ func CountFn(dir, script string, cfg CountConfig) func(context.Context) {
 
 		return cmd, nil
 	}
-	return newCmdFn(dir, run)
+	return util.NewCmdFn(dir, run)
 }
 
-func RecordVideoFn(dir string, getInput func() ([]string, int, error)) func(context.Context) {
+func RecordVideoFn(dir string, getInput func() ([]string, string, error)) func(context.Context) {
 	const program = "ffmpeg"
 	const hlsFlags = "" +
 		// Append to the same HLS index file.
@@ -126,14 +118,14 @@ func RecordVideoFn(dir string, getInput func() ([]string, int, error)) func(cont
 		// If we do not, with append_list turned on, ffmpeg will nonetheless insist on adding garbage program time, resulting in a worse situation.
 		"+program_date_time"
 	run := func(ctx context.Context, stdout, stderr *os.File) (*exec.Cmd, error) {
-		input, multicastPort, err := getInput()
+		input, multicastAddr, err := getInput()
 		if err != nil {
 			return nil, errors.Wrap(err, "")
 		}
 
 		segmentFName := filepath.Join(dir, "%s_%%06d.ts")
-		// strftime does not support "%s" in windows.
 		if runtime.GOOS == "windows" {
+			// strftime does not support "%s" in windows.
 			segmentFName = filepath.Join(dir, "%Y%m%d_%H%M%S_%%06d.ts")
 		}
 		indexFName := filepath.Join(dir, IndexM3U8)
@@ -146,9 +138,9 @@ func RecordVideoFn(dir string, getInput func() ([]string, int, error)) func(cont
 			// Use strftime syntax for segment filenames.
 			"strftime=1",
 			"hls_flags=" + hlsFlags,
-			"hls_segment_filename=" + segmentFName,
-		}, ":") + "]" + indexFName
-		teeUDP := fmt.Sprintf("[f=mpegts]udp://%s:%d/?pkt_size=%d", MulticastIP, multicastPort, VLCUDPLen)
+			"hls_segment_filename=" + ffmpeg.Escape(ffmpeg.TeeEscape(segmentFName)),
+		}, ":") + "]" + ffmpeg.Escape(indexFName)
+		teeUDP := fmt.Sprintf("[f=mpegts]udp://%s/?pkt_size=%d", multicastAddr, util.VLCUDPLen)
 		arg := append(input, []string{
 			// No audio.
 			"-an",
@@ -177,7 +169,7 @@ func RecordVideoFn(dir string, getInput func() ([]string, int, error)) func(cont
 
 		return cmd, nil
 	}
-	return newCmdFn(dir, run)
+	return util.NewCmdFn(dir, run)
 }
 
 func CreateTables(db *sql.DB) error {

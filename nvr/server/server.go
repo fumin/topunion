@@ -25,6 +25,7 @@ import (
 	"github.com/pkg/errors"
 
 	"nvr"
+	"nvr/util"
 )
 
 const (
@@ -109,9 +110,8 @@ func MPEGTSServe(s *Server, w http.ResponseWriter, r *http.Request) {
 
 	// Cannot use io.CopyBuffer, since it does not use our provided buffer.
 	// This is because conn implements WriterTo, which io.CopyBuffer directly uses.
-	// The buffer size nvr.VLCUDPLen should match the source or else there will be conn.Read errors.
-	b := make([]byte, nvr.VLCUDPLen)
-	prev := time.Now()
+	// The buffer size VLCUDPLen should match the source or else there will be conn.Read errors.
+	b := make([]byte, util.VLCUDPLen)
 	for {
 		if err := conn.SetReadDeadline(time.Now().Add(15 * time.Second)); err != nil {
 			break
@@ -182,7 +182,7 @@ var recordPageTmpl = template.Must(template.New("").Parse(recordPageHTML))
 
 func RecordPage(s *Server, w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("id")
-	record, err := nvr.GetRecord(s.db, id)
+	record, err := nvr.GetRecord(s.DB, id)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("%+v", err), http.StatusInternalServerError)
 		return
@@ -196,8 +196,8 @@ func RecordPage(s *Server, w http.ResponseWriter, r *http.Request) {
 		rr, ok := s.records.get(record.ID)
 		if ok {
 			v := url.Values{}
-			v.Set("a", nvr.MulticastIP+":"+strconv.Itoa(rr.record.RTSP[i].MulticastPort))
-			record.RTSP[i].Multicast = PathMPEGTS + "?" + v.Encode()
+			v.Set("a", rr.record.RTSP[i].Multicast)
+			record.RTSP[i].MPEGTS = PathMPEGTS + "?" + v.Encode()
 		}
 	}
 	for i, c := range record.Count {
@@ -235,7 +235,7 @@ func Index(s *Server, w http.ResponseWriter, r *http.Request) {
 	page.StopURL = PathStopRecord + "?" + v.Encode()
 
 	var err error
-	page.LatestRecords, err = nvr.SelectRecord(s.db, "ORDER BY createAt DESC LIMIT 30", nil)
+	page.LatestRecords, err = nvr.SelectRecord(s.DB, "ORDER BY id DESC LIMIT 30", nil)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("%+v", err), http.StatusInternalServerError)
 		return
@@ -254,6 +254,7 @@ func Index(s *Server, w http.ResponseWriter, r *http.Request) {
 type runningRecord struct {
 	record nvr.Record
 	cancel context.CancelFunc
+	ips    []string
 }
 
 type recordMap struct {
@@ -267,13 +268,19 @@ func newRecordMap() *recordMap {
 	return m
 }
 
-func (m *recordMap) set(rr *runningRecord) {
+func (m *recordMap) set(ipM *ipMap, rr *runningRecord) {
 	m.Lock()
 	defer m.Unlock()
 
-	ports := m.unusedPorts(len(rr.record.RTSP))
-	for i, port := range ports {
-		rr.record.RTSP[i].MulticastPort = port
+	// Assign rtsp streams with unused IPs.
+	var err error
+	rr.ips, err = ipM.get(len(rr.record.RTSP))
+	if err != nil {
+		log.Fatalf("%+v", err)
+	}
+	for i, ip := range rr.ips {
+		const port = 10000
+		rr.record.RTSP[i].Multicast = ip + ":" + strconv.Itoa(port)
 	}
 
 	if _, ok := m.m[rr.record.ID]; ok {
@@ -282,10 +289,17 @@ func (m *recordMap) set(rr *runningRecord) {
 	m.m[rr.record.ID] = rr
 }
 
-func (m *recordMap) del(id string) {
+func (m *recordMap) del(ipM *ipMap, id string) {
 	m.Lock()
+	defer m.Unlock()
+
+	rr, ok := m.m[id]
+	if !ok {
+		return
+	}
+
+	ipM.putBack(rr.ips)
 	delete(m.m, id)
-	m.Unlock()
 }
 
 func (m *recordMap) get(id string) (*runningRecord, bool) {
@@ -305,57 +319,60 @@ func (m *recordMap) all() []*runningRecord {
 	return all
 }
 
-func (m *recordMap) unusedPorts(n int) []int {
-	used := make(map[int]struct{})
-	for _, rr := range m.m {
-		for _, rtsp := range rr.record.RTSP {
-			used[rtsp.MulticastPort] = struct{}{}
-		}
-	}
-	usedKernel := usedKernelPorts()
+type ipMap struct {
+	ip  net.IP
+	net *net.IPNet
 
-	unused := make([]int, 0, n)
-	for i := 10000; i < 65535; i++ {
-		if _, ok := used[i]; ok {
-			continue
-		}
-		if _, ok := usedKernel[i]; ok {
-			continue
-		}
-		unused = append(unused, i)
-		if len(unused) == n {
-			break
-		}
-	}
-	if len(unused) != n {
-		log.Fatalf("%#v %#v", unused, m.m)
-	}
-	return unused
+	sync.RWMutex
+	m map[string]struct{}
 }
 
-func usedKernelPorts() map[int]struct{} {
-	m := make(map[int]struct{})
-	ifi, err := net.InterfaceByName(LoopbackInterface)
+func newIPMap(cidr string) (*ipMap, error) {
+	ip, ipnet, err := net.ParseCIDR(cidr)
 	if err != nil {
-		return m
+		return nil, errors.Wrap(err, "")
 	}
-	addrs, err := ifi.MulticastAddrs()
-	if err != nil {
-		return m
-	}
-	for _, addr := range addrs {
-		ipPort := strings.Split(addr.String(), ":")
-		if len(ipPort) != 2 {
-			continue
+	m := &ipMap{ip: ip, net: ipnet, m: make(map[string]struct{})}
+	return m, nil
+}
+
+func (m *ipMap) get(n int) ([]string, error) {
+	m.Lock()
+	defer m.Unlock()
+
+	unused := make([]string, 0, n)
+	// Allocate the iterating ip, instead of using m.ip directly.
+	// This is because the iteration will modify ip.
+	ip := net.ParseIP(m.ip.String())
+	for ip := ip.Mask(m.net.Mask); m.net.Contains(ip); util.Inc(ip) {
+		if len(unused) >= n {
+			break
 		}
-		port, err := strconv.Atoi(ipPort[1])
-		if err != nil {
+
+		s := ip.String()
+		if _, ok := m.m[s]; ok {
 			continue
 		}
 
-		m[port] = struct{}{}
+		unused = append(unused, s)
 	}
-	return m
+
+	if len(unused) != n {
+		return nil, errors.Errorf("insufficient")
+	}
+	for _, s := range unused {
+		m.m[s] = struct{}{}
+	}
+
+	return unused, nil
+}
+
+func (m *ipMap) putBack(ips []string) {
+	m.Lock()
+	for _, ip := range ips {
+		delete(m.m, ip)
+	}
+	m.Unlock()
 }
 
 type Server struct {
@@ -365,9 +382,10 @@ type Server struct {
 	ScriptDir string
 	Scripts   nvr.Scripts
 
-	db        *sql.DB
+	DB        *sql.DB
 	RecordDir string
 
+	ips     *ipMap
 	records *recordMap
 }
 
@@ -390,18 +408,20 @@ func NewServer(dir, addr string) (*Server, error) {
 	dbPath := filepath.Join(dir, "db.sqlite")
 	dbV := url.Values{}
 	dbV.Set("_journal_mode", "WAL")
-	s.db, err = sql.Open("sqlite3", "file:"+dbPath+"?"+dbV.Encode())
+	s.DB, err = sql.Open("sqlite3", "file:"+dbPath+"?"+dbV.Encode())
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
-	// Ignore errors in nvr.CreateTables, since it likely means tables have already been prepared.
-	nvr.CreateTables(s.db)
 
 	s.RecordDir = filepath.Join(dir, "record")
 	if err := os.MkdirAll(s.RecordDir, os.ModePerm); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
 
+	s.ips, err = newIPMap("239.0.0.1/24")
+	if err != nil {
+		return nil, errors.Wrap(err, "")
+	}
 	s.records = newRecordMap()
 
 	handleJSON(s, PathStartRecord, StartRecord)
@@ -444,7 +464,7 @@ func recordLink(record nvr.Record) string {
 
 func (s *Server) startRecord(record nvr.Record) (string, error) {
 	now := time.Now()
-	record.ID = nvr.TimeFormat(now)
+	record.ID = util.TimeFormat(now)
 	record.Create = now
 
 	recordDir := nvr.RecordDir(s.RecordDir, record.ID)
@@ -457,7 +477,7 @@ func (s *Server) startRecord(record nvr.Record) (string, error) {
 			return "", errors.Wrap(err, fmt.Sprintf("%#v", rtsp))
 		}
 	}
-	if err := nvr.InsertRecord(s.db, record); err != nil {
+	if err := nvr.InsertRecord(s.DB, record); err != nil {
 		return "", errors.Wrap(err, "")
 	}
 
@@ -470,7 +490,7 @@ func (s *Server) startRecord(record nvr.Record) (string, error) {
 		}
 
 		rr.record.Err = fmt.Sprintf("%+v", err)
-		if err := nvr.Update(s.db, nvr.TableRecord, rr.record.ID, "err=?", []interface{}{rr.record.Err}); err != nil {
+		if err := nvr.Update(s.DB, nvr.TableRecord, rr.record.ID, "err=?", []interface{}{rr.record.Err}); err != nil {
 			log.Printf("%+v", err)
 		}
 	}()
@@ -482,8 +502,8 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rr.cancel = cancel
-	s.records.set(rr)
-	defer s.records.del(rr.record.ID)
+	s.records.set(s.ips, rr)
+	defer s.records.del(s.ips, rr.record.ID)
 	close(recordsSet)
 
 	// Prepare RTSPs.
@@ -564,18 +584,18 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 					}
 				}
 			}()
-			errLog := nvr.NewErrorLogger(filepath.Join(dir, ErrorLogFilename))
+			errLog := util.NewErrorLogger(filepath.Join(dir, ErrorLogFilename))
 			defer errLog.Close()
 		Loop:
 			for {
-				errLog.E(func() error { return nvr.UpdateLastTrack(s.db, rr.record, countID) })
+				errLog.E(func() error { return nvr.UpdateLastTrack(s.DB, rr.record, countID) })
 				select {
 				case <-processDone:
 					break Loop
 				case <-time.After(nvr.HLSTime * time.Second):
 				}
 			}
-			errLog.E(func() error { return nvr.UpdateLastTrack(s.db, rr.record, countID) })
+			errLog.E(func() error { return nvr.UpdateLastTrack(s.DB, rr.record, countID) })
 		}(i, c)
 	}
 
@@ -583,16 +603,14 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 	case <-ctx.Done():
 	case <-allRTSPDone:
 	}
-	rr.record.Stop = time.Now()
-	if err := nvr.Update(s.db, nvr.TableRecord, rr.record.ID, "stop=?", []interface{}{rr.record.Stop}); err != nil {
+	if err := nvr.Update(s.DB, nvr.TableRecord, rr.record.ID, "stop=?", []interface{}{time.Now()}); err != nil {
 		return errors.Wrap(err, "")
 	}
 
 	for _, done := range countDone {
 		<-done
 	}
-	rr.record.Cleanup = time.Now()
-	if err := nvr.Update(s.db, nvr.TableRecord, rr.record.ID, "cleanup=?", []interface{}{rr.record.Cleanup}); err != nil {
+	if err := nvr.Update(s.DB, nvr.TableRecord, rr.record.ID, "cleanup=?", []interface{}{time.Now()}); err != nil {
 		return errors.Wrap(err, "")
 	}
 	return nil

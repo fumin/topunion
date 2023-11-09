@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"nvr"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +10,9 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+
+	"nvr"
+	"nvr/util"
 )
 
 func TestDeleteOldVideos(t *testing.T) {
@@ -24,7 +26,7 @@ func TestDeleteOldVideos(t *testing.T) {
 
 	for _, tc := range tests {
 		tc := tc
-		t.Run(nvr.TimeFormat(tc.now), func(t *testing.T) {
+		t.Run(util.TimeFormat(tc.now), func(t *testing.T) {
 			t.Parallel()
 			dir, err := os.MkdirTemp("", "")
 			if err != nil {
@@ -41,7 +43,7 @@ func TestDeleteOldVideos(t *testing.T) {
 				t.Fatalf("%+v", err)
 			}
 
-			record := nvr.Record{ID: nvr.TimeFormat(tc.now)}
+			record := nvr.Record{ID: util.TimeFormat(tc.now)}
 			rtsp0 := nvr.RTSP{
 				Name:  "testVid",
 				Input: []string{"-stream_loop", "-1", "-re", "-i", testVid},

@@ -3,7 +3,6 @@ package nvr
 import (
 	"context"
 	"database/sql"
-	"nvr/cuda"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +11,9 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"nvr/cuda"
+	"nvr/util"
 )
 
 func TestInsertRecord(t *testing.T) {
@@ -72,8 +74,10 @@ func TestSameIndex(t *testing.T) {
 	if err := os.MkdirAll(srcDir, os.ModePerm); err != nil {
 		t.Fatalf("%+v", err)
 	}
-	getInput := func() ([]string, error) {
-		return []string{"-stream_loop", "-1", "-re", "-i", testVid}, nil
+	getInput := func() ([]string, string, error) {
+		// Just use some multicast address, since we do not care about the video content.
+		const multicastAddr = "239.0.0.1:10000"
+		return []string{"-stream_loop", "-1", "-re", "-i", testVid}, multicastAddr, nil
 	}
 	srcCtx, srcCancel := context.WithCancel(context.Background())
 	defer srcCancel()
@@ -92,6 +96,8 @@ func TestSameIndex(t *testing.T) {
 	c.Config.AI.Yolo.Size = 640
 	c = c.Fill(dir)
 	if err := c.Prepare(); err != nil {
+		b, _ := os.ReadFile(filepath.Join(srcDir, util.StderrFilename))
+		t.Logf("%s", b)
 		t.Fatalf("%+v", err)
 	}
 	dstDir := filepath.Dir(c.Config.TrackIndex)

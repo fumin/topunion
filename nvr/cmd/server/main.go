@@ -9,6 +9,7 @@ import (
 
 	"github.com/pkg/errors"
 
+	"nvr"
 	"nvr/server"
 )
 
@@ -48,6 +49,8 @@ func mainWithErr() error {
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
+	// Ignore errors in nvr.CreateTables, since it likely means tables have already been prepared.
+	nvr.CreateTables(s.DB)
 
 	daily(func() error { return s.DeleteOldVideos(10 * 24 * time.Hour) })
 

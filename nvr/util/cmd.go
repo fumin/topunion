@@ -1,4 +1,4 @@
-package nvr
+package util
 
 import (
 	"context"
@@ -9,70 +9,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
-	"text/template/parse"
 	"time"
 
 	"github.com/pkg/errors"
 )
 
-const ymdhmsFormat = "20060102_150405"
+const (
+	StdoutFilename = "stdout.txt"
+	StderrFilename = "stderr.txt"
+	StatusFilename = "status.txt"
+)
 
-func TimeFormat(inT time.Time) string {
-	t := inT.In(time.UTC)
-	microSec := t.Nanosecond() / 1e3
-	return t.Format(ymdhmsFormat) + "_" + fmt.Sprintf("%06d", microSec)
-}
-
-func TimeParse(name string) (time.Time, error) {
-	ss := strings.Split(name, "_")
-	if len(ss) != 3 {
-		return time.Time{}, errors.Errorf("%d", len(ss))
-	}
-	t, err := time.Parse(ymdhmsFormat, ss[0]+"_"+ss[1])
-	if err != nil {
-		return time.Time{}, errors.Wrap(err, "")
-	}
-	microSec, err := strconv.Atoi(ss[2])
-	if err != nil {
-		return time.Time{}, errors.Wrap(err, "")
-	}
-	nanoSec := microSec * 1e3
-
-	parsed := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), nanoSec, t.Location())
-	return parsed, nil
-}
-
-func TmplFields(t *parse.Tree) map[string]struct{} {
-	fields := make(map[string]struct{})
-	for _, n := range t.Root.Nodes {
-		action, ok := n.(*parse.ActionNode)
-		if !ok {
-			continue
-		}
-		cmds := action.Pipe.Cmds
-		if len(cmds) == 0 {
-			continue
-		}
-		args := cmds[0].Args
-		if len(args) == 0 {
-			continue
-		}
-		field, ok := args[0].(*parse.FieldNode)
-		if !ok {
-			continue
-		}
-		if len(field.Ident) == 0 {
-			continue
-		}
-
-		fields[field.Ident[0]] = struct{}{}
-	}
-	return fields
-}
-
-func newCmdFn(dir string, fn func(context.Context, *os.File, *os.File) (*exec.Cmd, error)) func(context.Context) {
+func NewCmdFn(dir string, fn func(context.Context, *os.File, *os.File) (*exec.Cmd, error)) func(context.Context) {
 	run := func(ctx context.Context) {
 		statusPath := filepath.Join(dir, StatusFilename)
 		status, err := os.OpenFile(statusPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -234,11 +182,7 @@ func NewErrorLogger(fpath string) *ErrorLogger {
 }
 
 func (el *ErrorLogger) Close() {
-	if el.f != nil {
-		if err := el.f.Close(); err != nil {
-			log.Printf("%+v", err)
-		}
-	}
+	el.closeFile()
 }
 
 func (el *ErrorLogger) E(fn func() error) {
@@ -259,23 +203,42 @@ func (el *ErrorLogger) E(fn func() error) {
 			return errors.Wrap(err, "")
 		}
 
-		if el.f == nil {
-			f, err := os.OpenFile(el.fpath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-			if err != nil {
-				return errors.Wrap(err, "")
-			}
-			el.f = f
-		}
-		if _, err := el.f.Write(append(b, '\n')); err != nil {
+		f, err := el.file()
+		if err != nil {
 			return errors.Wrap(err, "")
 		}
-		if err := el.f.Sync(); err != nil {
+		if _, err := f.Write(append(b, '\n')); err != nil {
+			return errors.Wrap(err, "")
+		}
+		if err := f.Sync(); err != nil {
 			return errors.Wrap(err, "")
 		}
 		return nil
 	}()
 	if writeErr != nil {
-		el.f = nil
+		el.closeFile()
 		log.Printf("funcErr: %+v, writeErr: %+v", funcErr, writeErr)
 	}
+}
+
+func (el *ErrorLogger) file() (*os.File, error) {
+	if el.f != nil {
+		return el.f, nil
+	}
+	var err error
+	el.f, err = os.OpenFile(el.fpath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, errors.Wrap(err, "")
+	}
+	return el.f, nil
+}
+
+func (el *ErrorLogger) closeFile() {
+	if el.f == nil {
+		return
+	}
+	if err := el.f.Close(); err != nil {
+		log.Printf("%+v", err)
+	}
+	el.f = nil
 }
