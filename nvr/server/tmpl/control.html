@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+</head>
+<body>
+
+<pre id="info"></pre>
+
+<div id="start-section">
+	<button id="start-btn">Start</button>
+</div>
+<div id="stop-section">
+	<button id="stop-btn">Stop</button>
+	<a href="{{.CurrentRecord.Link}}">{{.CurrentRecord.ID}}</a>
+</div>
+
+<script>
+let page = {{.}};
+
+function reqJSON(method, urlStr, loadEnd, okCallback) {
+	document.querySelector("#info").textContent = "http requesting...";
+	let req = new XMLHttpRequest();
+	req.addEventListener("loadend", function(ev){
+		loadEnd(ev);
+	});
+	req.addEventListener("error", function(ev){
+		document.querySelector("#info").textContent = "http error";
+	});
+	req.addEventListener("load", function(ev){
+		let resp = JSON.parse(ev.target.responseText);
+		if (resp.Error) {
+			document.querySelector("#info").textContent = resp.Error.Msg;
+			return;
+		}
+		okCallback(resp);
+	});
+	req.open(method, urlStr);
+	req.send();
+}
+
+if (page.CurrentRecord.ID == "") {
+	let section = document.querySelector("#stop-section");
+	section.style.display = "none";
+} else {
+	let section = document.querySelector("#start-section");
+	section.style.display = "none";
+}
+let startBtn = document.querySelector("#start-btn");
+startBtn.addEventListener("click", function(ev){
+	startBtn.disabled = true;
+	let loadEnd = function(ev){
+		startBtn.disabled = false;
+	};
+	let okCallback = function(resp) {
+		window.location.reload();
+	};
+	reqJSON("POST", page.StartURL, loadEnd, okCallback);
+});
+let stopBtn = document.querySelector("#stop-btn");
+stopBtn.addEventListener("click", function(ev){
+	stopBtn.disabled = true;
+	let loadEnd = function(ev){
+		stopBtn.disabled = false;
+	};
+	let okCallback = function(resp) {
+		window.location.reload();
+	};
+	reqJSON("POST", page.StopURL, loadEnd, okCallback);
+});
+
+</script>
+</body>
+</html>

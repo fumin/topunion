@@ -1,21 +1,23 @@
 package main
 
 import (
+	"context"
 	_ "embed"
 	"flag"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"time"
 
 	"github.com/pkg/errors"
 
-	"nvr"
 	"nvr/server"
 )
 
 var (
 	addr      = flag.String("a", ":8080", "address to listen")
-	serverDir = flag.String("d", "serverData", "server directory")
+	serverDir = flag.String("d", "devData", "server directory")
 )
 
 func daily(f func() error) {
@@ -49,14 +51,32 @@ func mainWithErr() error {
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
-	// Ignore errors in nvr.CreateTables, since it likely means tables have already been prepared.
-	nvr.CreateTables(s.DB)
+	defer s.Close()
 
+	// Run background jobs.
 	daily(func() error { return s.DeleteOldVideos(10 * 24 * time.Hour) })
 
+	// Run HTTP server.
+	idleConnsClosed := make(chan struct{})
+	go func() {
+		defer close(idleConnsClosed)
+
+		sigint := make(chan os.Signal, 1)
+		signal.Notify(sigint, os.Interrupt)
+		<-sigint
+
+		// We received an interrupt signal, shut down.
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := s.Server.Shutdown(ctx); err != nil {
+			log.Printf("HTTP server Shutdown: %+v", err)
+		}
+	}()
 	log.Printf("listening at %s", s.Server.Addr)
 	if err := s.Server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Printf("%+v", err)
 	}
+	<-idleConnsClosed
+
 	return nil
 }

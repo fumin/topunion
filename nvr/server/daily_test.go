@@ -42,17 +42,19 @@ func TestDeleteOldVideos(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%+v", err)
 			}
+			defer s.Close()
 
 			record := nvr.Record{ID: util.TimeFormat(tc.now)}
-			rtsp0 := nvr.RTSP{
+			camera0 := nvr.Camera{
 				Name:  "testVid",
 				Input: []string{"-stream_loop", "-1", "-re", "-i", testVid},
 			}
-			record.RTSP = append(record.RTSP, rtsp0)
+			record.Camera = append(record.Camera, camera0)
 
 			// Run src.
 			recordDir := nvr.RecordDir(s.RecordDir, record.ID)
-			if err := rtsp0.Prepare(recordDir); err != nil {
+			camera0Dir := filepath.Join(recordDir, camera0.Name)
+			if err := os.MkdirAll(camera0Dir, os.ModePerm); err != nil {
 				t.Fatalf("%+v", err)
 			}
 			srcCtx, srcCancel := context.WithCancel(context.Background())
@@ -60,7 +62,14 @@ func TestDeleteOldVideos(t *testing.T) {
 			srcDone := make(chan struct{})
 			go func() {
 				defer close(srcDone)
-				nvr.RecordVideoFn(rtsp0.Dir(recordDir), rtsp0.GetInput)(srcCtx)
+				getInput := func() ([]string, string, error) {
+					input, err := camera0.GetInput()
+					if err != nil {
+						return nil, "", errors.Wrap(err, "")
+					}
+					return input, "239.0.0.1:10000", nil
+				}
+				nvr.RecordVideoFn(camera0Dir, getInput)(srcCtx)
 			}()
 			for i := 0; i < 10; i++ {
 				n, _ := numVideos(recordDir)

@@ -5,15 +5,18 @@
 <body>
 
 <div>
-	<h2>RTSP</h2>
-	{{range .RTSP}}
+	<h2>Camera</h2>
+	{{range .Camera}}
 	<div>
 		<h3>{{.Name}}</h3>
-		<div>Link: {{.Input}}</div>
+		{{if .MPEGTS}}
+		<a href="{{.MPEGTS}}">Live</a>
+		{{else}}
+		<a href="{{.Video}}">Video</a>
+		{{end}}
+		{{if .Input}}<div>Input: {{.Input}}</div>{{end}}
 		<div>Network interface: {{.NetworkInterface}}</div>
 		<div>Mac address: {{.MacAddress}}</div>
-		{{if .Multicast}}<a href="{{.Multicast}}">Live</a>{{end}}
-		<a href="{{.Video}}">Video</a>
 	</div>
 	{{end}}
 </div>
@@ -22,9 +25,9 @@
 	{{range .Count}}
 	<div>
 		<h3>{{.Src}}</h3>
-		<div>Config: {{.Config}}</div>
-		<div>Track: {{.Track}}</div>
 		<a href="{{.TrackVideo}}">Track video</a>
+		<div>Track: {{.Track}}</div>
+		<div>Config: {{.Config}}</div>
 	</div>
 	{{end}}
 </div>

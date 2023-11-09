@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"nvr"
 	"nvr/cuda"
 
@@ -9,29 +10,29 @@ import (
 
 func startVideoWifi(s *Server) (string, error) {
 	var record nvr.Record
-	rtsp0 := nvr.RTSP{
+	camera0 := nvr.Camera{
 		Name:             "RedmiNote4X",
 		Input:            []string{"rtsp://admin:0000@{{.IP}}:8080/h264_ulaw.sdp"},
 		NetworkInterface: "wlx08bfb849ed0a",
 		MacAddress:       "4c:49:e3:3a:87:4a",
 	}
-	// record.RTSP = append(record.RTSP, rtsp0)
-	rtsp1 := nvr.RTSP{
+	// record.Camera = append(record.Camera, camera0)
+	camera1 := nvr.Camera{
 		Name:             "Redmi12C",
 		Input:            []string{"rtsp://admin:0000@{{.IP}}:8080/h264_ulaw.sdp"},
 		NetworkInterface: "wlx08bfb849ed0a",
 		MacAddress:       "f4:1a:9c:67:58:ee",
 	}
-	// record.RTSP = append(record.RTSP, rtsp1)
-	rtsp2 := nvr.RTSP{
+	// record.Camera = append(record.Camera, camera1)
+	camera2 := nvr.Camera{
 		Name:             "FuminPhone",
 		Input:            []string{"-rtsp_transport", "tcp", "-i", "rtsp://admin:0000@{{.IP}}:8080/h264_ulaw.sdp"},
 		NetworkInterface: "wlx08bfb849ed0a",
 		MacAddress:       "94:7b:ae:94:ca:80",
 	}
-	record.RTSP = append(record.RTSP, rtsp2)
+	record.Camera = append(record.Camera, camera2)
 
-	count0 := nvr.Count{Src: rtsp0.Name}
+	count0 := nvr.Count{Src: camera0.Name}
 	count0.Config.AI.Smart = true
 	count0.Config.AI.Device = "cuda:0"
 	count0.Config.AI.Mask.Enable = false
@@ -45,7 +46,7 @@ func startVideoWifi(s *Server) (string, error) {
 	count0.Config.AI.Yolo.Size = 640
 	// record.Count = append(record.Count, count0)
 
-	count1 := nvr.Count{Src: rtsp1.Name}
+	count1 := nvr.Count{Src: camera1.Name}
 	count1.Config.AI.Smart = true
 	count1.Config.AI.Device = "cuda:0"
 	count1.Config.AI.Mask.Enable = false
@@ -68,10 +69,10 @@ func startVideoWifi(s *Server) (string, error) {
 
 func startVideoFile(s *Server, fpath string) (string, error) {
 	var record nvr.Record
-	rtsp0 := nvr.RTSP{Name: "rtsp0", Input: []string{fpath}}
-	record.RTSP = append(record.RTSP, rtsp0)
+	camera0 := nvr.Camera{Name: "camera0", Input: []string{fpath}, Repeat: 1}
+	record.Camera = append(record.Camera, camera0)
 
-	count0 := nvr.Count{Src: rtsp0.Name}
+	count0 := nvr.Count{Src: camera0.Name}
 	count0.Config.AI.Device = "cpu"
 	if cuda.IsAvailable() {
 		count0.Config.AI.Smart = true
@@ -87,6 +88,25 @@ func startVideoFile(s *Server, fpath string) (string, error) {
 	count0.Config.AI.Yolo.Weights = "yolo_best.pt"
 	count0.Config.AI.Yolo.Size = 640
 	record.Count = append(record.Count, count0)
+
+	id, err := s.startRecord(record)
+	if err != nil {
+		return "", errors.Wrap(err, "")
+	}
+	return id, nil
+}
+
+func startSMPTE(s *Server) (string, error) {
+	var record nvr.Record
+	for i := 0; i < 2; i++ {
+		camera := nvr.Camera{Name: fmt.Sprintf("camera%d", i), Input: []string{"-f", "lavfi", "-i", "smptebars"}}
+		record.Camera = append(record.Camera, camera)
+		count := nvr.Count{Src: camera.Name}
+		count.Config.AI.Smart = false
+		count.Config.AI.Device = "cpu"
+		count.Config.AI.Mask.Enable = false
+		record.Count = append(record.Count, count)
+	}
 
 	id, err := s.startRecord(record)
 	if err != nil {

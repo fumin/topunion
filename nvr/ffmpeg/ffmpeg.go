@@ -43,6 +43,27 @@ func FFProbe(input []string) (ProbeOutput, error) {
 	return out, nil
 }
 
+// FixFFProbeArg fixes inputs to the ffprobe command.
+// It removes options that are valid for ffmpeg, but not for ffprobe.
+func FixFFProbeInput(input []string) []string {
+	fixed := make([]string, 0, len(input))
+	i := 0
+	for i < len(input) {
+		inp := input[i]
+
+		switch inp {
+		case "-stream_loop":
+			i += 2
+		case "-re":
+			i += 1
+		default:
+			fixed = append(fixed, inp)
+			i++
+		}
+	}
+	return fixed
+}
+
 // Escape escapes ffmpeg strings.
 // https://ffmpeg.org/ffmpeg-utils.html#quoting_005fand_005fescaping
 func Escape(s string) string {

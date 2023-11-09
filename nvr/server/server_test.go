@@ -32,16 +32,17 @@ func TestEgg(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
+	defer s.Close()
 	if err := nvr.CreateTables(s.DB); err != nil {
 		t.Fatalf("%+v", err)
 	}
 
 	var record nvr.Record
 	video := filepath.Join("../", "sample", "shilin20230826.mp4")
-	rtsp0 := nvr.RTSP{Name: "rtsp0", Input: []string{video}, Repeat: 2}
-	record.RTSP = append(record.RTSP, rtsp0)
+	camera0 := nvr.Camera{Name: "camera0", Input: []string{video}, Repeat: 2}
+	record.Camera = append(record.Camera, camera0)
 
-	count0 := nvr.Count{Src: rtsp0.Name}
+	count0 := nvr.Count{Src: camera0.Name}
 	count0.Config.AI.Smart = true
 	count0.Config.AI.Device = "cuda:0"
 	count0.Config.AI.Mask.Enable = true
@@ -70,7 +71,7 @@ func TestEgg(t *testing.T) {
 				tracks = append(tracks, t)
 			}
 		}
-		if len(s.records.all()) == 0 {
+		if len(s.records.m) == 0 {
 			break
 		}
 		<-time.After(time.Second)
@@ -83,7 +84,7 @@ func TestEgg(t *testing.T) {
 	if !(tracks[(len(tracks)-1)/2].Count < tracks[len(tracks)-1].Count) {
 		t.Fatalf("%#v", tracks)
 	}
-	if tracks[len(tracks)-1].Count != 49*rtsp0.Repeat {
+	if tracks[len(tracks)-1].Count != 49*camera0.Repeat {
 		t.Fatalf("%#v", tracks)
 	}
 }
@@ -104,17 +105,18 @@ func TestStartRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
+	defer s.Close()
 	if err := nvr.CreateTables(s.DB); err != nil {
 		t.Fatalf("%+v", err)
 	}
 
 	record := nvr.Record{ID: util.TimeFormat(time.Now())}
-	rtsp0 := nvr.RTSP{
+	camera0 := nvr.Camera{
 		Name:  "testVid",
 		Input: []string{"-stream_loop", "-1", "-re", "-i", testVid},
 	}
-	record.RTSP = append(record.RTSP, rtsp0)
-	count0 := nvr.Count{Src: rtsp0.Name}
+	record.Camera = append(record.Camera, camera0)
+	count0 := nvr.Count{Src: camera0.Name}
 	count0.Config.AI.Smart = cuda.IsAvailable()
 	count0.Config.AI.Device = "cpu"
 	if count0.Config.AI.Smart {
@@ -133,7 +135,7 @@ func TestStartRecord(t *testing.T) {
 	var videoSecs float64 = 10
 	<-time.After(time.Duration(videoSecs*1e9) * time.Nanosecond)
 
-	if err := s.stopRecord(id); err != nil {
+	if err := s.records.cancel(id); err != nil {
 		t.Fatalf("%+v", err)
 	}
 	// Wait at most a few seconds for the record to clean up.

@@ -33,8 +33,8 @@ func TestInsertRecord(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 
-	r := Record{ID: "abc", Create: time.Now()}
-	if err := InsertRecord(db, r); err != nil {
+	r, err := InsertRecord(db, "", time.Now(), Record{})
+	if err != nil {
 		t.Fatalf("%+v", err)
 	}
 	readR, err := GetRecord(db, r.ID)

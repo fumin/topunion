@@ -21,48 +21,50 @@ import (
 	"nvr/util"
 )
 
-type RTSP struct {
+type Camera struct {
 	Name             string
 	Input            []string
 	NetworkInterface string
 	MacAddress       string
 	Repeat           int
 
-	// Multicast is the multicast address of the live stream.
-	Multicast string `json:",omitempty"`
 	// MPEGTS is the HTTP link to the MPEGTS stream.
 	MPEGTS string `json:",omitempty"`
 	// Video is the HTTP link to the saved video.
 	Video string `json:",omitempty"`
 }
 
-func (info RTSP) GetInput() ([]string, string, error) {
+func (cam Camera) GetInput() ([]string, error) {
 	var err error
-	for i := 0; i < 10; i++ {
+	for i := 0; ; i++ {
 		var input []string
-		input, err = info.getInput()
+		input, err = cam.getInput()
 		if err == nil {
-			return input, info.Multicast, nil
+			return input, nil
+		}
+
+		if i > 10 {
+			break
 		}
 		<-time.After(500 * time.Millisecond)
 	}
-	return nil, "", err
+	return nil, err
 }
 
-func (info RTSP) getInput() ([]string, error) {
-	if len(info.Input) == 0 {
+func (cam Camera) getInput() ([]string, error) {
+	if len(cam.Input) == 0 {
 		return nil, errors.Errorf("empty input")
 	}
-	last := info.Input[len(info.Input)-1]
+	last := cam.Input[len(cam.Input)-1]
 
 	var input []string
 	switch {
-	case info.NetworkInterface != "":
-		hws, err := arp.Scan(info.NetworkInterface)
+	case cam.NetworkInterface != "":
+		hws, err := arp.Scan(cam.NetworkInterface)
 		if err != nil {
 			return nil, errors.Wrap(err, "")
 		}
-		hw, ok := hws[info.MacAddress]
+		hw, ok := hws[cam.MacAddress]
 		if !ok {
 			return nil, errors.Errorf("%#v", hws)
 		}
@@ -72,11 +74,11 @@ func (info RTSP) getInput() ([]string, error) {
 			return nil, errors.Errorf("%#v", data)
 		}
 
-		input = make([]string, len(info.Input))
-		copy(input, info.Input[:len(info.Input)-1])
+		input = make([]string, len(cam.Input))
+		copy(input, cam.Input[:len(cam.Input)-1])
 		input[len(input)-1] = string(buf.Bytes())
 	default:
-		input = info.Input
+		input = cam.Input
 	}
 
 	if len(input) == 1 {
@@ -85,39 +87,13 @@ func (info RTSP) getInput() ([]string, error) {
 	return input, nil
 }
 
-func (rtsp RTSP) Dir(recordDir string) string {
-	return filepath.Join(recordDir, rtsp.Name)
-}
-
-func fixFFProbeArg(input []string) []string {
-	fixed := make([]string, 0, len(input))
-	i := 0
-	for i < len(input) {
-		inp := input[i]
-
-		switch inp {
-		case "-stream_loop":
-			i += 2
-		case "-re":
-			i += 1
-		default:
-			fixed = append(fixed, inp)
-			i++
-		}
-	}
-	return fixed
-}
-
-func (rtsp RTSP) Prepare(recordDir string) error {
-	input, _, err := rtsp.GetInput()
+func (cam Camera) Validate() error {
+	input, err := cam.GetInput()
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
-	if _, err := ffmpeg.FFProbe(fixFFProbeArg(input)); err != nil {
-		return errors.Wrap(err, "")
-	}
-
-	if err := os.MkdirAll(rtsp.Dir(recordDir), os.ModePerm); err != nil {
+	fixed := ffmpeg.FixFFProbeInput(input)
+	if _, err := ffmpeg.FFProbe(fixed); err != nil {
 		return errors.Wrap(err, "")
 	}
 	return nil
@@ -247,9 +223,9 @@ func Update(db *sql.DB, table, id, columns string, values []interface{}) error {
 }
 
 type Record struct {
-	ID    string
-	RTSP  []RTSP
-	Count []Count
+	ID     string
+	Camera []Camera
+	Count  []Count
 
 	Err     string
 	Create  time.Time
@@ -269,25 +245,33 @@ func RecordDir(root, id string) string {
 	return dir
 }
 
-func InsertRecord(db *sql.DB, r Record) error {
-	rtspB, err := json.Marshal(r.RTSP)
+func InsertRecord(db *sql.DB, root string, create time.Time, r Record) (Record, error) {
+	r.ID = util.TimeFormat(create)
+	r.Create = create
+
+	recordDir := RecordDir(root, r.ID)
+	for i, c := range r.Count {
+		r.Count[i] = c.Fill(recordDir)
+	}
+
+	cameraB, err := json.Marshal(r.Camera)
 	if err != nil {
-		return errors.Wrap(err, "")
+		return Record{}, errors.Wrap(err, "")
 	}
 	countB, err := json.Marshal(r.Count)
 	if err != nil {
-		return errors.Wrap(err, "")
+		return Record{}, errors.Wrap(err, "")
 	}
 
 	sqlStr := "INSERT INTO " + TableRecord + `
-	(id, rtsp, count, err, createAt, stop, cleanup) VALUES
+	(id, camera, count, err, createAt, stop, cleanup) VALUES
 	(?,  ?,    ?,     ?,  ?,         ?,    ?)`
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := db.ExecContext(ctx, sqlStr, r.ID, rtspB, countB, r.Err, r.Create, r.Stop, r.Cleanup); err != nil {
-		return errors.Wrap(err, "")
+	if _, err := db.ExecContext(ctx, sqlStr, r.ID, cameraB, countB, r.Err, r.Create, r.Stop, r.Cleanup); err != nil {
+		return Record{}, errors.Wrap(err, "")
 	}
-	return nil
+	return r, nil
 }
 
 func UpdateLastTrack(db *sql.DB, record Record, countID int) error {
@@ -349,7 +333,7 @@ func GetRecord(db *sql.DB, id string) (Record, error) {
 }
 
 func SelectRecord(db *sql.DB, constraint string, args []interface{}) ([]Record, error) {
-	sqlStr := `SELECT id, rtsp, count, err, createAt, stop, cleanup FROM ` + TableRecord + " " + constraint
+	sqlStr := `SELECT id, camera, count, err, createAt, stop, cleanup FROM ` + TableRecord + " " + constraint
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	rows, err := db.QueryContext(ctx, sqlStr, args...)
@@ -361,12 +345,12 @@ func SelectRecord(db *sql.DB, constraint string, args []interface{}) ([]Record, 
 	records := make([]Record, 0)
 	for rows.Next() {
 		var r Record
-		var rtspB, countB []byte
-		if err := rows.Scan(&r.ID, &rtspB, &countB, &r.Err, &r.Create, &r.Stop, &r.Cleanup); err != nil {
+		var cameraB, countB []byte
+		if err := rows.Scan(&r.ID, &cameraB, &countB, &r.Err, &r.Create, &r.Stop, &r.Cleanup); err != nil {
 			return nil, errors.Wrap(err, "")
 		}
-		if err := json.Unmarshal(rtspB, &r.RTSP); err != nil {
-			return nil, errors.Wrap(err, fmt.Sprintf("%s", rtspB))
+		if err := json.Unmarshal(cameraB, &r.Camera); err != nil {
+			return nil, errors.Wrap(err, fmt.Sprintf("%s", cameraB))
 		}
 		if err := json.Unmarshal(countB, &r.Count); err != nil {
 			return nil, errors.Wrap(err, fmt.Sprintf("%s", countB))

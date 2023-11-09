@@ -16,7 +16,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +31,7 @@ const (
 	PathStartRecord = "/StartRecord"
 	PathStopRecord  = "/StopRecord"
 	PathRecordPage  = "/RecordPage"
+	PathControl     = "/Control"
 	PathMPEGTSServe = "/MPEGTSServe"
 	PathMPEGTS      = "/MPEGTS"
 	PathHLSIndex    = "/HLSIndex"
@@ -39,12 +39,11 @@ const (
 	PathServe       = "/Serve"
 
 	ErrorLogFilename = "error.txt"
-
-	LoopbackInterface = "lo0"
 )
 
 func StartRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}, error) {
-	id, err := startVideoFile(s, "sample/shilin20230826.mp4")
+	id, err := startSMPTE(s)
+	// id, err := startVideoFile(s, "sample/shilin20230826.mp4")
 	// id, err := startVideoWifi(s)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
@@ -53,24 +52,39 @@ func StartRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	return resp, nil
 }
 
-func (s *Server) stopRecord(id string) error {
-	rr, ok := s.records.get(id)
-	if !ok {
-		return errors.Errorf("not found")
-	}
-	rr.cancel()
-	return nil
-}
-
 func StopRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}, error) {
 	id := r.FormValue("id")
-	if err := s.stopRecord(id); err != nil {
+	if err := s.records.cancel(id); err != nil {
 		return nil, errors.Wrap(err, fmt.Sprintf("\"%s\"", id))
 	}
 	return struct{}{}, nil
 }
 
-//go:embed mpegts.html
+//go:embed tmpl/control.html
+var controlHTML string
+var controlTmpl = template.Must(template.New("").Parse(controlHTML))
+
+func Control(s *Server, w http.ResponseWriter, r *http.Request) {
+	page := struct {
+		CurrentRecord nvr.Record
+		StartURL      string
+		StopURL       string
+	}{}
+
+	records := s.records.running()
+	for _, r := range records {
+		page.CurrentRecord = r
+		page.CurrentRecord.Link = recordLink(r)
+	}
+	page.StartURL = PathStartRecord
+	v := url.Values{}
+	v.Set("id", page.CurrentRecord.ID)
+	page.StopURL = PathStopRecord + "?" + v.Encode()
+
+	controlTmpl.Execute(w, page)
+}
+
+//go:embed tmpl/mpegts.html
 var mpegtsHTML string
 var mpegtsTmpl = template.Must(template.New("").Parse(mpegtsHTML))
 
@@ -93,7 +107,7 @@ func MPEGTSServe(s *Server, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	ifi, err := net.InterfaceByName(LoopbackInterface)
+	ifi, err := net.InterfaceByName("lo0")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -158,7 +172,7 @@ func HLSIndex(s *Server, w http.ResponseWriter, r *http.Request) {
 	w.Write(out.Bytes())
 }
 
-//go:embed video.html
+//go:embed tmpl/video.html
 var videoHTML string
 var videoTmpl = template.Must(template.New("").Parse(videoHTML))
 
@@ -176,7 +190,7 @@ func Serve(s *Server, w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, fpath)
 }
 
-//go:embed record_page.html
+//go:embed tmpl/record_page.html
 var recordPageHTML string
 var recordPageTmpl = template.Must(template.New("").Parse(recordPageHTML))
 
@@ -188,16 +202,16 @@ func RecordPage(s *Server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ips := s.records.ips(record.ID)
 	rd := nvr.RecordDir(s.RecordDir, record.ID)
-	for i, rtsp := range record.RTSP {
-		indexPath := filepath.Join(rd, rtsp.Name, nvr.IndexM3U8)
-		record.RTSP[i].Video = s.videoURL(indexPath)
+	for i, cam := range record.Camera {
+		indexPath := filepath.Join(rd, cam.Name, nvr.IndexM3U8)
+		record.Camera[i].Video = s.videoURL(indexPath)
 
-		rr, ok := s.records.get(record.ID)
-		if ok {
+		if len(ips) > 0 {
 			v := url.Values{}
-			v.Set("a", rr.record.RTSP[i].Multicast)
-			record.RTSP[i].MPEGTS = PathMPEGTS + "?" + v.Encode()
+			v.Set("a", ffmpegMulticast(ips[i]))
+			record.Camera[i].MPEGTS = PathMPEGTS + "?" + v.Encode()
 		}
 	}
 	for i, c := range record.Count {
@@ -208,31 +222,14 @@ func RecordPage(s *Server, w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-//go:embed index.html
+//go:embed tmpl/index.html
 var indexHTML string
 var indexTmpl = template.Must(template.New("").Parse(indexHTML))
 
 func Index(s *Server, w http.ResponseWriter, r *http.Request) {
 	page := struct {
-		CurrentRecord nvr.Record
-		StartURL      string
-		StopURL       string
-
 		LatestRecords []nvr.Record
 	}{}
-
-	records := s.records.all()
-	for _, r := range records {
-		if r.record.Stop.IsZero() {
-			page.CurrentRecord = r.record
-			page.CurrentRecord.Link = recordLink(r.record)
-			break
-		}
-	}
-	page.StartURL = PathStartRecord
-	v := url.Values{}
-	v.Set("id", page.CurrentRecord.ID)
-	page.StopURL = PathStopRecord + "?" + v.Encode()
 
 	var err error
 	page.LatestRecords, err = nvr.SelectRecord(s.DB, "ORDER BY id DESC LIMIT 30", nil)
@@ -252,9 +249,10 @@ func Index(s *Server, w http.ResponseWriter, r *http.Request) {
 }
 
 type runningRecord struct {
-	record nvr.Record
-	cancel context.CancelFunc
-	ips    []string
+	record   nvr.Record
+	cancel   context.CancelFunc
+	canceled bool
+	ips      []string
 }
 
 type recordMap struct {
@@ -268,25 +266,35 @@ func newRecordMap() *recordMap {
 	return m
 }
 
-func (m *recordMap) set(ipM *ipMap, rr *runningRecord) {
+func (m *recordMap) set(ipM *ipMap, id string, rr *runningRecord) error {
 	m.Lock()
 	defer m.Unlock()
 
 	// Assign rtsp streams with unused IPs.
 	var err error
-	rr.ips, err = ipM.get(len(rr.record.RTSP))
+	rr.ips, err = ipM.get(len(rr.record.Camera))
 	if err != nil {
-		log.Fatalf("%+v", err)
-	}
-	for i, ip := range rr.ips {
-		const port = 10000
-		rr.record.RTSP[i].Multicast = ip + ":" + strconv.Itoa(port)
+		return errors.Wrap(err, "")
 	}
 
-	if _, ok := m.m[rr.record.ID]; ok {
-		panic(fmt.Sprintf("%#v", m))
+	if _, ok := m.m[id]; ok {
+		return errors.Errorf("duplicate id %s %#v", id, m.m)
 	}
 	m.m[rr.record.ID] = rr
+	return nil
+}
+
+func (m *recordMap) cancel(id string) error {
+	m.Lock()
+	defer m.Unlock()
+
+	rr, ok := m.m[id]
+	if !ok {
+		return errors.Errorf("not found")
+	}
+	rr.cancel()
+	rr.canceled = true
+	return nil
 }
 
 func (m *recordMap) del(ipM *ipMap, id string) {
@@ -302,25 +310,35 @@ func (m *recordMap) del(ipM *ipMap, id string) {
 	delete(m.m, id)
 }
 
-func (m *recordMap) get(id string) (*runningRecord, bool) {
+func (m *recordMap) ips(id string) []string {
 	m.RLock()
+	defer m.RUnlock()
+
 	rr, ok := m.m[id]
-	m.RUnlock()
-	return rr, ok
+	if !ok {
+		return nil
+	}
+
+	ips := make([]string, len(rr.ips))
+	copy(ips, rr.ips)
+	return ips
 }
 
-func (m *recordMap) all() []*runningRecord {
+func (m *recordMap) running() []nvr.Record {
 	m.RLock()
-	all := make([]*runningRecord, 0, len(m.m))
+	defer m.RUnlock()
+
+	running := make([]nvr.Record, 0, len(m.m))
 	for _, rr := range m.m {
-		all = append(all, rr)
+		if rr.canceled {
+			continue
+		}
+		running = append(running, rr.record)
 	}
-	m.RUnlock()
-	return all
+	return running
 }
 
 type ipMap struct {
-	ip  net.IP
 	net *net.IPNet
 
 	sync.RWMutex
@@ -328,11 +346,11 @@ type ipMap struct {
 }
 
 func newIPMap(cidr string) (*ipMap, error) {
-	ip, ipnet, err := net.ParseCIDR(cidr)
+	_, ipnet, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
-	m := &ipMap{ip: ip, net: ipnet, m: make(map[string]struct{})}
+	m := &ipMap{net: ipnet, m: make(map[string]struct{})}
 	return m, nil
 }
 
@@ -340,11 +358,20 @@ func (m *ipMap) get(n int) ([]string, error) {
 	m.Lock()
 	defer m.Unlock()
 
+	broadcast := util.BroadcastAddr(m.net)
+
 	unused := make([]string, 0, n)
 	// Allocate the iterating ip, instead of using m.ip directly.
 	// This is because the iteration will modify ip.
-	ip := net.ParseIP(m.ip.String())
-	for ip := ip.Mask(m.net.Mask); m.net.Contains(ip); util.Inc(ip) {
+	ip := net.IP(make([]byte, len(m.net.IP)))
+	copy(ip, m.net.IP)
+	// Skip the first address, as it is the subnet address.
+	util.Inc(ip)
+	for ; m.net.Contains(ip); util.Inc(ip) {
+		if ip.Equal(broadcast) {
+			continue
+		}
+
 		if len(unused) >= n {
 			break
 		}
@@ -356,10 +383,10 @@ func (m *ipMap) get(n int) ([]string, error) {
 
 		unused = append(unused, s)
 	}
-
 	if len(unused) != n {
 		return nil, errors.Errorf("insufficient")
 	}
+
 	for _, s := range unused {
 		m.m[s] = struct{}{}
 	}
@@ -369,10 +396,11 @@ func (m *ipMap) get(n int) ([]string, error) {
 
 func (m *ipMap) putBack(ips []string) {
 	m.Lock()
+	defer m.Unlock()
+
 	for _, ip := range ips {
 		delete(m.m, ip)
 	}
-	m.Unlock()
 }
 
 type Server struct {
@@ -427,6 +455,7 @@ func NewServer(dir, addr string) (*Server, error) {
 	handleJSON(s, PathStartRecord, StartRecord)
 	handleJSON(s, PathStopRecord, StopRecord)
 	handleFunc(s, PathRecordPage, RecordPage)
+	handleFunc(s, PathControl, Control)
 	handleFunc(s, PathMPEGTSServe, MPEGTSServe)
 	handleFunc(s, PathMPEGTS, MPEGTS)
 	handleFunc(s, PathHLSIndex, HLSIndex)
@@ -436,6 +465,16 @@ func NewServer(dir, addr string) (*Server, error) {
 	handleFunc(s, "/", Index)
 
 	return s, nil
+}
+
+func (s *Server) Close() error {
+	s.cancelRecordings()
+
+	err := s.DB.Close()
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	return nil
 }
 
 func (s *Server) serveURL(fpath string) string {
@@ -463,24 +502,27 @@ func recordLink(record nvr.Record) string {
 }
 
 func (s *Server) startRecord(record nvr.Record) (string, error) {
-	now := time.Now()
-	record.ID = util.TimeFormat(now)
-	record.Create = now
+	// Validate fields.
+	camNames := make(map[string]struct{}, len(record.Camera))
+	for _, cam := range record.Camera {
+		if _, ok := camNames[cam.Name]; ok {
+			return "", errors.Errorf("duplicate name %s %#v", cam.Name, camNames)
+		}
+		camNames[cam.Name] = struct{}{}
 
-	recordDir := nvr.RecordDir(s.RecordDir, record.ID)
-	for i, c := range record.Count {
-		record.Count[i] = c.Fill(recordDir)
-	}
-	for _, rtsp := range record.RTSP {
-		if err := rtsp.Prepare(recordDir); err != nil {
-			os.RemoveAll(recordDir)
-			return "", errors.Wrap(err, fmt.Sprintf("%#v", rtsp))
+		if err := cam.Validate(); err != nil {
+			return "", errors.Wrap(err, fmt.Sprintf("%#v", cam))
 		}
 	}
-	if err := nvr.InsertRecord(s.DB, record); err != nil {
+
+	// Write to database.
+	var err error
+	record, err = nvr.InsertRecord(s.DB, s.RecordDir, time.Now(), record)
+	if err != nil {
 		return "", errors.Wrap(err, "")
 	}
 
+	// Start recording in background.
 	recordsSet := make(chan struct{})
 	go func() {
 		rr := &runningRecord{record: record}
@@ -502,25 +544,40 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rr.cancel = cancel
-	s.records.set(s.ips, rr)
+	if err := s.records.set(s.ips, rr.record.ID, rr); err != nil {
+		return errors.Wrap(err, "")
+	}
 	defer s.records.del(s.ips, rr.record.ID)
 	close(recordsSet)
 
-	// Prepare RTSPs.
+	// Prepare cameras.
 	recordDir := nvr.RecordDir(s.RecordDir, rr.record.ID)
-	rtspDone := make(map[string]chan struct{}, len(rr.record.RTSP))
-	for _, rtsp := range rr.record.RTSP {
+	cameraDone := make(map[string]chan struct{}, len(rr.record.Camera))
+	for i, cam := range rr.record.Camera {
+		multicast := ffmpegMulticast(rr.ips[i])
+
+		dir := filepath.Join(recordDir, cam.Name)
+		if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+			return errors.Wrap(err, "")
+		}
+
 		done := make(chan struct{})
-		rtspDone[rtsp.Name] = done
-		go func(rtsp nvr.RTSP) {
+		cameraDone[cam.Name] = done
+		go func(cam nvr.Camera, multicast string) {
 			defer close(done)
 
-			repeat := rtsp.Repeat
+			repeat := cam.Repeat
 			if repeat == 0 {
 				repeat = math.MaxInt
 			}
-			dir := rtsp.Dir(recordDir)
-			fn := nvr.RecordVideoFn(dir, rtsp.GetInput)
+			getInput := func() ([]string, string, error) {
+				input, err := cam.GetInput()
+				if err != nil {
+					return nil, "", errors.Wrap(err, "")
+				}
+				return input, multicast, nil
+			}
+			fn := nvr.RecordVideoFn(dir, getInput)
 			for i := 0; i < repeat; i++ {
 				fn(ctx)
 				select {
@@ -529,12 +586,12 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 				default:
 				}
 			}
-		}(rtsp)
+		}(cam, multicast)
 	}
-	allRTSPDone := make(chan struct{})
+	allCameraDone := make(chan struct{})
 	go func() {
-		defer close(allRTSPDone)
-		for _, c := range rtspDone {
+		defer close(allCameraDone)
+		for _, c := range cameraDone {
 			<-c
 		}
 	}()
@@ -546,7 +603,7 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 			return errors.Wrap(err, "")
 		}
 
-		srcDoneC := rtspDone[c.Src]
+		srcDoneC := cameraDone[c.Src]
 		done := make(chan struct{})
 		countDone = append(countDone, done)
 		go func(countID int, c nvr.Count) {
@@ -601,7 +658,7 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 
 	select {
 	case <-ctx.Done():
-	case <-allRTSPDone:
+	case <-allCameraDone:
 	}
 	if err := nvr.Update(s.DB, nvr.TableRecord, rr.record.ID, "stop=?", []interface{}{time.Now()}); err != nil {
 		return errors.Wrap(err, "")
@@ -614,6 +671,24 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 		return errors.Wrap(err, "")
 	}
 	return nil
+}
+
+func (s *Server) cancelRecordings() {
+	s.records.Lock()
+	defer s.records.Unlock()
+
+	for _, rr := range s.records.m {
+		rr.cancel()
+	}
+
+	for len(s.records.m) != 0 {
+		ids := make([]string, 0, len(s.records.m))
+		for id := range s.records.m {
+			ids = append(ids, id)
+		}
+		log.Printf("waiting for records to cleanup %#v", ids)
+		<-time.After(1)
+	}
 }
 
 func handleFunc(s *Server, httpPath string, fn func(*Server, http.ResponseWriter, *http.Request)) {
@@ -644,4 +719,8 @@ func handleJSON(s *Server, httpPath string, fn func(*Server, http.ResponseWriter
 		}
 	}
 	s.ServeMux.HandleFunc(httpPath, handler)
+}
+
+func ffmpegMulticast(ip string) string {
+	return ip + ":10000"
 }

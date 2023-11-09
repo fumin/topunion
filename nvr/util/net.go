@@ -1,12 +1,8 @@
 package util
 
 import (
-	"context"
 	"fmt"
 	"net"
-	"os/exec"
-	"strings"
-	"time"
 
 	"github.com/pkg/errors"
 )
@@ -20,6 +16,21 @@ func Inc(ip net.IP) {
 	}
 }
 
+func BroadcastAddr(ipnet *net.IPNet) net.IP {
+	broadcast := make([]byte, len(ipnet.IP))
+	copy(broadcast, ipnet.IP)
+
+	ones, bits := ipnet.Mask.Size()
+	netBits := bits - ones
+	for i := 0; i < netBits; i++ {
+		byteIdx := i / 8
+		bitIdx := i % 8
+		broadcast[len(broadcast)-1-byteIdx] |= (1 << bitIdx)
+	}
+
+	return broadcast
+}
+
 func Loopback() (*net.Interface, error) {
 	ifis, err := net.Interfaces()
 	if err != nil {
@@ -31,7 +42,7 @@ func Loopback() (*net.Interface, error) {
 			continue
 		}
 		for _, addr := range addrs {
-			if strings.HasPrefix(addr.String(), "127.0.0.1") {
+			if net.ParseIP(addr.String()).IsLoopback() {
 				return &ifi, nil
 			}
 		}
@@ -39,53 +50,22 @@ func Loopback() (*net.Interface, error) {
 	return nil, ErrNotFound
 }
 
-func MulticastInterface(addr string) (*net.Interface, error) {
-	// Start multicast sender.
-	cmdNameArgs := strings.Split(fmt.Sprintf("ffmpeg -f lavfi -i smptebars -c:v libx264 -f tee -map 0:v [f=mpegts]udp://%s:10000?pkt_size=%d", addr, VLCUDPLen), " ")
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, cmdNameArgs[0], cmdNameArgs[1:]...)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, errors.Wrap(err, "")
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, errors.Wrap(err, "")
-	}
-
-	// Get the interface of the multicast sender.
-	ifi, err := multicastInterface(addr)
-	if err != nil {
-		return nil, errors.Wrap(err, "")
-	}
-
-	// Stop multicast sender
-	if _, err := stdin.Write([]byte{'q'}); err != nil {
-		return nil, errors.Wrap(err, "")
-	}
-	if err := cmd.Wait(); err != nil {
-		return nil, errors.Wrap(err, "")
-	}
-
-	return ifi, nil
-}
-
-func multicastInterface(addr string) (*net.Interface, error) {
+func MulticastAddrs() (map[string][]net.Interface, error) {
 	ifis, err := net.Interfaces()
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
+
+	mAddrs := make(map[string][]net.Interface)
 	for _, ifi := range ifis {
 		addrs, err := ifi.MulticastAddrs()
 		if err != nil {
-			continue
+			return nil, errors.Wrap(err, fmt.Sprintf("%#v", ifi))
 		}
 		for _, a := range addrs {
-			// log.Printf("%s %s", a, ifi.Name)
-			if a.String() == addr {
-				return &ifi, nil
-			}
+			s := a.String()
+			mAddrs[s] = append(mAddrs[s], ifi)
 		}
 	}
-	return nil, ErrNotFound
+	return mAddrs, nil
 }

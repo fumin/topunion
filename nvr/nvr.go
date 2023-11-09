@@ -176,7 +176,7 @@ func CreateTables(db *sql.DB) error {
 	sqlStrs := []string{
 		"CREATE TABLE " + TableRecord + ` (
                         id text PRIMARY KEY,
-                        rtsp text,
+                        camera text,
                         count text,
                         err text,
                         createAt datetime,
