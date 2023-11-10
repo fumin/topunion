@@ -1,31 +1,45 @@
 <!DOCTYPE html>
 <html>
 <head>
+	<style>
+table, th, td {
+	border: 1px solid black;
+	border-collapse: collapse;
+}
+
+.alert {
+  animation: alertKeyframes 2s infinite;
+}
+@keyframes alertKeyframes {
+  0% {color: inherit;}
+  50% {color: red;}
+  100% {color: inherit;}
+}
+	</style>
 </head>
 <body>
-
+<h1><img src="/static/logo.jpg" style="vertical-align: bottom; height: 1.5em;">上聯智能鸡蛋计数系统</h1>
 <pre id="info"></pre>
 
-<div id="start-section">
-	<button id="start-btn">Start</button>
-</div>
-<div id="stop-section">
-	<button id="stop-btn">Stop</button>
-	<a href="{{.CurrentRecord.Link}}">{{.CurrentRecord.ID}}</a>
+<div>
+	<div>本周生产了<span class="alert">{{.ThisWeek}}</span>颗，上周生产了{{.LastWeek}}颗</div>
+	<div>本月生产了{{.ThisMonth}}颗，上月生产了{{.LastMonth}}颗</div>
 </div>
 
-<table>
+<table style="margin-top: 1em;">
 	<thead><tr>
-		<th>ID</th>
-		<th>Start</th>
-		<th>Stop</th>
+		<th>开始</th>
+		<th>颗数</th>
+		<th>结束</th>
+		<th>细节</th>
 	</tr></thead>
 	<tbody>
-	{{range .LatestRecords}}
+	{{range .Records}}
 		<tr>
-			<td><a href="{{.Link}}">{{.ID}}</a></td>
 			<td>{{.CreateTime}}</td>
+			<td>{{.Eggs}}</td>
 			<td>{{.StopTime}}</td>
+			<td><a href="{{.Link}}">{{.ID}}</a></td>
 		</tr>
 	{{end}}
 	</tbody>
@@ -35,7 +49,6 @@
 let page = {{.}};
 
 function reqJSON(method, urlStr, loadEnd, okCallback) {
-	document.querySelector("#info").textContent = "http requesting...";
 	let req = new XMLHttpRequest();
 	req.addEventListener("loadend", function(ev){
 		loadEnd(ev);
@@ -54,36 +67,6 @@ function reqJSON(method, urlStr, loadEnd, okCallback) {
 	req.open(method, urlStr);
 	req.send();
 }
-
-if (page.CurrentRecord.ID == "") {
-	let section = document.querySelector("#stop-section");
-	section.style.display = "none";
-} else {
-	let section = document.querySelector("#start-section");
-	section.style.display = "none";
-}
-let startBtn = document.querySelector("#start-btn");
-startBtn.addEventListener("click", function(ev){
-	startBtn.disabled = true;
-	let loadEnd = function(ev){
-		startBtn.disabled = false;
-	};
-	let okCallback = function(resp) {
-		window.location.reload();
-	};
-	reqJSON("POST", page.StartURL, loadEnd, okCallback);
-});
-let stopBtn = document.querySelector("#stop-btn");
-stopBtn.addEventListener("click", function(ev){
-	stopBtn.disabled = true;
-	let loadEnd = function(ev){
-		stopBtn.disabled = false;
-	};
-	let okCallback = function(resp) {
-		window.location.reload();
-	};
-	reqJSON("POST", page.StopURL, loadEnd, okCallback);
-});
 
 </script>
 </body>

@@ -233,9 +233,10 @@ type Record struct {
 	Cleanup time.Time
 
 	// Fields for display only.
-	Link       string
 	CreateTime string
+	Eggs       int
 	StopTime   string
+	Link       string
 }
 
 func RecordDir(root, id string) string {

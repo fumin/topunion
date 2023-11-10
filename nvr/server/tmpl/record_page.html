@@ -5,29 +5,29 @@
 <body>
 
 <div>
-	<h2>Camera</h2>
+	<h2>摄像头</h2>
 	{{range .Camera}}
 	<div>
 		<h3>{{.Name}}</h3>
 		{{if .MPEGTS}}
-		<a href="{{.MPEGTS}}">Live</a>
+		<a href="{{.MPEGTS}}">直播</a>
 		{{else}}
-		<a href="{{.Video}}">Video</a>
+		<a href="{{.Video}}">视频</a>
 		{{end}}
-		{{if .Input}}<div>Input: {{.Input}}</div>{{end}}
-		<div>Network interface: {{.NetworkInterface}}</div>
-		<div>Mac address: {{.MacAddress}}</div>
+		{{if .Input}}<div>輸入：{{.Input}}</div>{{end}}
+		<div>网络接口：{{.NetworkInterface}}</div>
+		<div>MAC地址：{{.MacAddress}}</div>
 	</div>
 	{{end}}
 </div>
 <div>
-	<h2>Count</h2>
+	<h2>数蛋</h2>
 	{{range .Count}}
 	<div>
 		<h3>{{.Src}}</h3>
-		<a href="{{.TrackVideo}}">Track video</a>
-		<div>Track: {{.Track}}</div>
-		<div>Config: {{.Config}}</div>
+		<a href="{{.TrackVideo}}">视频</a>
+		<div>颗数：{{.Track.Count}}</div>
+		<div>配置：{{.Config}}</div>
 	</div>
 	{{end}}
 </div>

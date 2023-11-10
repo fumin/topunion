@@ -99,7 +99,7 @@ func startVideoFile(s *Server, fpath string) (string, error) {
 func startSMPTE(s *Server) (string, error) {
 	var record nvr.Record
 	for i := 0; i < 2; i++ {
-		camera := nvr.Camera{Name: fmt.Sprintf("camera%d", i), Input: []string{"-f", "lavfi", "-i", "smptebars"}}
+		camera := nvr.Camera{Name: fmt.Sprintf("camera%d", i), Input: []string{"-re", "-f", "lavfi", "-i", "smptebars"}}
 		record.Camera = append(record.Camera, camera)
 		count := nvr.Count{Src: camera.Name}
 		count.Config.AI.Smart = false

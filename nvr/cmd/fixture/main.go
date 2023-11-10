@@ -45,10 +45,11 @@ func mainWithErr() error {
 
 func insertRecords(s *server.Server) error {
 	now := time.Now()
-	monthFirst := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	month1st := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	lastMonth1st := month1st.AddDate(0, -1, 0)
 
 	records := make([]nvr.Record, 0)
-	for t := monthFirst; t.Before(now); t = t.Add(24 * time.Hour) {
+	for t := lastMonth1st; t.Before(now); t = t.Add(24 * time.Hour) {
 		create := t.Add(time.Duration(rand.Intn(8*60)) * time.Minute)
 		r := nvr.Record{Create: create}
 

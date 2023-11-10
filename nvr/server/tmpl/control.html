@@ -1,24 +1,28 @@
 <!DOCTYPE html>
 <html>
 <head>
+	<script src="/static/mpegts/mpegts.js"></script>
+
+	<script src="/static/util.js"></script>
 </head>
 <body>
 
 <pre id="info"></pre>
 
 <div id="start-section">
-	<button id="start-btn">Start</button>
+	<button id="start-btn" style="width: 100%; font-size: xx-large;">开始</button>
 </div>
 <div id="stop-section">
-	<button id="stop-btn">Stop</button>
-	<a href="{{.CurrentRecord.Link}}">{{.CurrentRecord.ID}}</a>
+	<button id="stop-btn" style="width: 100%; font-size: xx-large;">停止</button>
+	<div id="cameras-div"></div>
+	<div>
+		<span>详细信息：</span>
+		<a href="{{.Record.Link}}">{{.Record.ID}}</a>
+	</div>
 </div>
 
 <script>
-let page = {{.}};
-
 function reqJSON(method, urlStr, loadEnd, okCallback) {
-	document.querySelector("#info").textContent = "http requesting...";
 	let req = new XMLHttpRequest();
 	req.addEventListener("loadend", function(ev){
 		loadEnd(ev);
@@ -38,35 +42,115 @@ function reqJSON(method, urlStr, loadEnd, okCallback) {
 	req.send();
 }
 
-if (page.CurrentRecord.ID == "") {
-	let section = document.querySelector("#stop-section");
-	section.style.display = "none";
-} else {
+function newVideo(camera) {
+	let video = document.createElement("video");
+	video.id = camera.Name+"-video";
+	video.controls = true;
+	video.muted = true;
+	video.autoplay = true;
+	video.style["max-width"] = "100%";
+	video.style["max-height"] = "98vh";
+	return video;
+}
+
+function newUpdater(getURL, callback) {
+	let updater = {};
+
+	let secs = 10;
+	let get = function(){
+		let loadEnd = function(ev){
+			setTimeout(get, secs*1000);
+		};
+		reqJSON("GET", getURL, loadEnd, callback);
+	};
+
+	updater.start = function() {
+		get();
+	};
+
+	return updater;
+}
+
+function displayRecord(record, stopURL, getURL) {
 	let section = document.querySelector("#start-section");
 	section.style.display = "none";
+
+	let stopBtn = document.querySelector("#stop-btn");
+	stopBtn.addEventListener("click", function(ev){
+		stopBtn.disabled = true;
+		document.querySelector("#info").textContent = "http requesting...";
+		let loadEnd = function(ev){
+			stopBtn.disabled = false;
+		};
+		let okCallback = function(resp) {
+			document.querySelector("#info").textContent = "";
+			window.location.reload();
+		};
+		reqJSON("POST", stopURL, loadEnd, okCallback);
+	});
+
+	let camerasDiv = document.querySelector("#cameras-div");
+	let cntSpans = [];
+	for (let i = 0; i < record.Camera.length; i++) {
+		let cam = record.Camera[i];
+		let count = record.Count[i];
+
+		let div = document.createElement("div");
+		camerasDiv.appendChild(div);
+
+		let title = document.createElement("h3");
+		div.appendChild(title);
+		let danShu = document.createElement("span");
+		danShu.textContent = "蛋数：";
+		title.appendChild(danShu);
+		let cnt = document.createElement("span");
+		cnt.id = `cnt-${record.ID}-${i}`;
+		cnt.textContent = `${count.Track.Count}`;
+		title.appendChild(cnt);
+		cntSpans.push(cnt);
+
+		let videoElm = newVideo(cam);
+		div.appendChild(videoElm);
+		util.playMPEGTS(videoElm, cam.MPEGTS);
+	}
+
+	let callback = function(r) {
+		for (let i = 0; i < r.Count.length; i++) {
+			let cnt = r.Count[i];
+			let span = cntSpans[i];
+
+			span.textContent = `${cnt.Track.Count}`;
+		}
+	};
+	let updater = newUpdater(getURL, callback);
+	updater.start();
 }
-let startBtn = document.querySelector("#start-btn");
-startBtn.addEventListener("click", function(ev){
-	startBtn.disabled = true;
-	let loadEnd = function(ev){
-		startBtn.disabled = false;
-	};
-	let okCallback = function(resp) {
-		window.location.reload();
-	};
-	reqJSON("POST", page.StartURL, loadEnd, okCallback);
-});
-let stopBtn = document.querySelector("#stop-btn");
-stopBtn.addEventListener("click", function(ev){
-	stopBtn.disabled = true;
-	let loadEnd = function(ev){
-		stopBtn.disabled = false;
-	};
-	let okCallback = function(resp) {
-		window.location.reload();
-	};
-	reqJSON("POST", page.StopURL, loadEnd, okCallback);
-});
+
+function main(page) {
+	if (page.Record.ID == "") {
+		let section = document.querySelector("#stop-section");
+		section.style.display = "none";
+
+		let startBtn = document.querySelector("#start-btn");
+		startBtn.addEventListener("click", function(ev){
+			startBtn.disabled = true;
+			document.querySelector("#info").textContent = "http requesting...";
+			let loadEnd = function(ev){
+				startBtn.disabled = false;
+			};
+			let okCallback = function(resp) {
+				document.querySelector("#info").textContent = "";
+				window.location.reload();
+			};
+			reqJSON("POST", page.StartURL, loadEnd, okCallback);
+		});
+	} else {
+		displayRecord(page.Record, page.StopURL, page.GetURL);
+	}
+}
+
+let page = {{.}};
+main(page);
 
 </script>
 </body>

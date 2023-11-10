@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"database/sql"
 	"embed"
@@ -16,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +32,8 @@ import (
 const (
 	PathStartRecord = "/StartRecord"
 	PathStopRecord  = "/StopRecord"
+	PathGetRecord   = "/GetRecord"
+
 	PathRecordPage  = "/RecordPage"
 	PathControl     = "/Control"
 	PathMPEGTSServe = "/MPEGTSServe"
@@ -60,26 +64,43 @@ func StopRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{},
 	return struct{}{}, nil
 }
 
+func GetRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}, error) {
+	id := r.FormValue("id")
+	record, err := nvr.GetRecord(s.DB, id)
+	if err != nil {
+		return nil, errors.Wrap(err, fmt.Sprintf("\"%s\"", id))
+	}
+	record = s.displayRecord(record, PathMPEGTS)
+
+	// for i := range record.Count {
+	// 	record.Count[i].Track.Count = rand.Intn(100)
+	// }
+
+	return record, nil
+}
+
 //go:embed tmpl/control.html
 var controlHTML string
 var controlTmpl = template.Must(template.New("").Parse(controlHTML))
 
 func Control(s *Server, w http.ResponseWriter, r *http.Request) {
 	page := struct {
-		CurrentRecord nvr.Record
-		StartURL      string
-		StopURL       string
+		Record   nvr.Record
+		StartURL string
+		StopURL  string
+		GetURL   string
 	}{}
 
 	records := s.records.running()
-	for _, r := range records {
-		page.CurrentRecord = r
-		page.CurrentRecord.Link = recordLink(r)
+	if len(records) > 0 {
+		page.Record = s.displayRecord(records[0], PathMPEGTSServe)
 	}
+
 	page.StartURL = PathStartRecord
 	v := url.Values{}
-	v.Set("id", page.CurrentRecord.ID)
+	v.Set("id", page.Record.ID)
 	page.StopURL = PathStopRecord + "?" + v.Encode()
+	page.GetURL = PathGetRecord + "?" + v.Encode()
 
 	controlTmpl.Execute(w, page)
 }
@@ -201,22 +222,7 @@ func RecordPage(s *Server, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("%+v", err), http.StatusInternalServerError)
 		return
 	}
-
-	ips := s.records.ips(record.ID)
-	rd := nvr.RecordDir(s.RecordDir, record.ID)
-	for i, cam := range record.Camera {
-		indexPath := filepath.Join(rd, cam.Name, nvr.IndexM3U8)
-		record.Camera[i].Video = s.videoURL(indexPath)
-
-		if len(ips) > 0 {
-			v := url.Values{}
-			v.Set("a", ffmpegMulticast(ips[i]))
-			record.Camera[i].MPEGTS = PathMPEGTS + "?" + v.Encode()
-		}
-	}
-	for i, c := range record.Count {
-		record.Count[i].TrackVideo = s.videoURL(c.Config.TrackIndex)
-	}
+	record = s.displayRecord(record, PathMPEGTS)
 	if err := recordPageTmpl.Execute(w, record); err != nil {
 		log.Printf("%+v", err)
 	}
@@ -227,21 +233,58 @@ var indexHTML string
 var indexTmpl = template.Must(template.New("").Parse(indexHTML))
 
 func Index(s *Server, w http.ResponseWriter, r *http.Request) {
-	page := struct {
-		LatestRecords []nvr.Record
-	}{}
-
-	var err error
-	page.LatestRecords, err = nvr.SelectRecord(s.DB, "ORDER BY id DESC LIMIT 30", nil)
+	now := time.Now()
+	month1st := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	lastMonth1st := month1st.AddDate(0, -1, 0)
+	records, err := nvr.SelectRecord(s.DB, "WHERE id >= ?", []interface{}{util.TimeFormat(lastMonth1st)})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("%+v", err), http.StatusInternalServerError)
 		return
 	}
-	for i, r := range page.LatestRecords {
-		page.LatestRecords[i].Link = recordLink(r)
-		page.LatestRecords[i].CreateTime = r.Create.In(time.Local).Format(time.DateTime)
-		page.LatestRecords[i].StopTime = r.Stop.In(time.Local).Format(time.DateTime)
+	slices.SortFunc(records, func(a, b nvr.Record) int {
+		return -cmp.Compare(a.Create.UnixNano(), b.Create.UnixNano())
+	})
+
+	mon := now.AddDate(0, 0, -int(now.Weekday()-time.Monday))
+	thisMonday := time.Date(mon.Year(), mon.Month(), mon.Day(), 0, 0, 0, 0, now.Location())
+	lastMonday := thisMonday.AddDate(0, 0, -7)
+	thisWeek, lastWeek, thisMonth, lastMonth := 0, 0, 0, 0
+	for _, r := range records {
+		if r.Create.After(thisMonday) {
+			thisWeek += r.Count[len(r.Count)-1].Track.Count
+		}
+		if r.Create.After(lastMonday) && r.Create.Before(thisMonday) {
+			lastWeek += r.Count[len(r.Count)-1].Track.Count
+		}
+		if r.Create.After(month1st) {
+			thisMonth += r.Count[len(r.Count)-1].Track.Count
+		}
+		if r.Create.After(lastMonth1st) && r.Create.Before(month1st) {
+			lastMonth += r.Count[len(r.Count)-1].Track.Count
+		}
 	}
+
+	latests := records
+	if len(latests) > 30 {
+		latests = latests[:30]
+	}
+	for i, r := range latests {
+		latests[i] = s.displayRecord(r, PathMPEGTS)
+	}
+
+	page := struct {
+		ThisWeek  int
+		LastWeek  int
+		ThisMonth int
+		LastMonth int
+
+		Records []nvr.Record
+	}{}
+	page.ThisWeek = thisWeek
+	page.LastWeek = lastWeek
+	page.ThisMonth = thisMonth
+	page.LastMonth = lastMonth
+	page.Records = latests
 
 	if err := indexTmpl.Execute(w, page); err != nil {
 		// log.Printf("%+v", err)
@@ -454,6 +497,8 @@ func NewServer(dir, addr string) (*Server, error) {
 
 	handleJSON(s, PathStartRecord, StartRecord)
 	handleJSON(s, PathStopRecord, StopRecord)
+	handleJSON(s, PathGetRecord, GetRecord)
+
 	handleFunc(s, PathRecordPage, RecordPage)
 	handleFunc(s, PathControl, Control)
 	handleFunc(s, PathMPEGTSServe, MPEGTSServe)
@@ -674,21 +719,64 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 }
 
 func (s *Server) cancelRecordings() {
+	// Only hold the lock for a brief time.
+	// This is to avoid a deadlock when the background recording wants to delete itself from s.records.
 	s.records.Lock()
-	defer s.records.Unlock()
-
 	for _, rr := range s.records.m {
 		rr.cancel()
 	}
+	s.records.Unlock()
 
-	for len(s.records.m) != 0 {
+	for i := 1; ; i++ {
+		s.records.RLock()
 		ids := make([]string, 0, len(s.records.m))
 		for id := range s.records.m {
 			ids = append(ids, id)
 		}
-		log.Printf("waiting for records to cleanup %#v", ids)
-		<-time.After(1)
+		s.records.RUnlock()
+		if len(ids) == 0 {
+			break
+		}
+
+		if i%10 == 0 {
+			log.Printf("waiting for records to cleanup %#v", ids)
+		}
+		<-time.After(1 * time.Second)
 	}
+}
+
+func (s *Server) displayRecord(r nvr.Record, mpegtsPath string) nvr.Record {
+	// Record fields.
+	r.CreateTime = r.Create.In(time.Local).Format(time.DateTime)
+	if len(r.Count) > 0 {
+		r.Eggs = r.Count[len(r.Count)-1].Track.Count
+	}
+	r.StopTime = r.Stop.In(time.Local).Format(time.DateTime)
+	r.Link = recordLink(r)
+
+	// Camera fields.
+	var ips []string
+	if r.Stop.IsZero() {
+		ips = s.records.ips(r.ID)
+	}
+	rDir := nvr.RecordDir(s.RecordDir, r.ID)
+	for i, cam := range r.Camera {
+		indexPath := filepath.Join(rDir, cam.Name, nvr.IndexM3U8)
+		r.Camera[i].Video = s.videoURL(indexPath)
+
+		if len(ips) > 0 {
+			v := url.Values{}
+			v.Set("a", ffmpegMulticast(ips[i]))
+			r.Camera[i].MPEGTS = mpegtsPath + "?" + v.Encode()
+		}
+	}
+
+	// Count fields.
+	for i, c := range r.Count {
+		r.Count[i].TrackVideo = s.videoURL(c.Config.TrackIndex)
+	}
+
+	return r
 }
 
 func handleFunc(s *Server, httpPath string, fn func(*Server, http.ResponseWriter, *http.Request)) {
