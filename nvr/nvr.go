@@ -145,7 +145,7 @@ func RecordVideoFn(dir string, getInput func() ([]string, string, error)) func(c
 			// No audio.
 			"-an",
 			// Variable frame rate, otherwise the HLS codec fails.
-			// "-vsync", "vfr", // for old versions of ffmpeg
+			"-vsync", "vfr", // for old versions of ffmpeg
 			// "-fps_mode:v:0", "vfr",
 			// Use H254 encoding.
 			"-c:v", "libx264",

@@ -87,13 +87,13 @@ func (cam Camera) getInput() ([]string, error) {
 	return input, nil
 }
 
-func (cam Camera) Validate() error {
+func (cam Camera) Validate(ctx context.Context) error {
 	input, err := cam.GetInput()
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
 	fixed := ffmpeg.FixFFProbeInput(input)
-	if _, err := ffmpeg.FFProbe(fixed); err != nil {
+	if _, err := ffmpeg.FFProbe(ctx, fixed); err != nil {
 		return errors.Wrap(err, "")
 	}
 	return nil
@@ -120,7 +120,7 @@ func (c Count) Fill(recordDir string) Count {
 	return c
 }
 
-func (c Count) Prepare() error {
+func (c Count) Prepare(ctx context.Context) error {
 	if strings.HasPrefix(c.Config.AI.Device, "cuda") {
 		if !cuda.IsAvailable() {
 			return errors.Errorf("no cuda")
@@ -139,7 +139,11 @@ func (c Count) Prepare() error {
 		if err == nil {
 			break
 		}
-		<-time.After(time.Second)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
 	}
 	if err != nil {
 		return errors.Wrap(err, fmt.Sprintf("no src after %d seconds", waitSecs))
@@ -295,18 +299,21 @@ func UpdateLastTrack(db *sql.DB, record Record, countID int) error {
 	if err := tx.QueryRowContext(ctx, sqlStr, record.ID).Scan(&countB); err != nil {
 		return errors.Wrap(err, "")
 	}
-	if err := json.Unmarshal(countB, &record.Count); err != nil {
+	// Allocate memory instead of reusing record.Count to avoid data races.
+	// This is because we are updating counts with the new track, while other goroutines read record.Count.
+	var counts []Count
+	if err := json.Unmarshal(countB, &counts); err != nil {
 		return errors.Wrap(err, "")
 	}
 
 	// Update track.
-	if !(countID >= 0 && countID < len(record.Count)) {
-		return errors.Errorf("%d %d %#v", countID, len(record.Count), record.Count)
+	if !(countID >= 0 && countID < len(counts)) {
+		return errors.Errorf("%d %d %#v", countID, len(counts), counts)
 	}
-	record.Count[countID].Track = track
+	counts[countID].Track = track
 
 	// Save track.
-	updatedB, err := json.Marshal(record.Count)
+	updatedB, err := json.Marshal(counts)
 	if err != nil {
 		return errors.Wrap(err, "")
 	}

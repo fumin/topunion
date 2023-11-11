@@ -2,9 +2,14 @@ package util
 
 import (
 	"fmt"
+	"log"
 	"net"
 
 	"github.com/pkg/errors"
+)
+
+var (
+	LoopbackInterface = loopbackMust()
 )
 
 func Inc(ip net.IP) {
@@ -31,23 +36,27 @@ func BroadcastAddr(ipnet *net.IPNet) net.IP {
 	return broadcast
 }
 
-func Loopback() (*net.Interface, error) {
+func Loopback() ([]net.Interface, error) {
 	ifis, err := net.Interfaces()
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
+
+	los := make([]net.Interface, 0)
 	for _, ifi := range ifis {
 		addrs, err := ifi.Addrs()
 		if err != nil {
-			continue
+			return nil, errors.Wrap(err, "")
 		}
+
 		for _, addr := range addrs {
-			if net.ParseIP(addr.String()).IsLoopback() {
-				return &ifi, nil
+			if parseIP(addr.String()).IsLoopback() {
+				los = append(los, ifi)
+				break
 			}
 		}
 	}
-	return nil, ErrNotFound
+	return los, nil
 }
 
 func MulticastAddrs() (map[string][]net.Interface, error) {
@@ -68,4 +77,25 @@ func MulticastAddrs() (map[string][]net.Interface, error) {
 		}
 	}
 	return mAddrs, nil
+}
+
+func parseIP(addr string) net.IP {
+	if ip := net.ParseIP(addr); len(ip) > 0 {
+		return ip
+	}
+	if ip, _, err := net.ParseCIDR(addr); err == nil {
+		return ip
+	}
+	return nil
+}
+
+func loopbackMust() *net.Interface {
+	los, err := Loopback()
+	if err != nil {
+		log.Fatalf("%+v", err)
+	}
+	if len(los) == 0 {
+		log.Fatalf("no loopback")
+	}
+	return &los[0]
 }

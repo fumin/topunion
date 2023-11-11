@@ -95,7 +95,7 @@ func TestSameIndex(t *testing.T) {
 	c.Config.AI.Yolo.Weights = "yolo_best.pt"
 	c.Config.AI.Yolo.Size = 640
 	c = c.Fill(dir)
-	if err := c.Prepare(); err != nil {
+	if err := c.Prepare(context.Background()); err != nil {
 		b, _ := os.ReadFile(filepath.Join(srcDir, util.StderrFilename))
 		t.Logf("%s", b)
 		t.Fatalf("%+v", err)

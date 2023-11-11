@@ -1,12 +1,14 @@
 package ffmpeg
 
 import (
+	"context"
 	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 )
 
 func TestFFProbe(t *testing.T) {
@@ -24,7 +26,9 @@ func TestFFProbe(t *testing.T) {
 		t.Fatalf("%+v %s", err, b)
 	}
 
-	probe, err := FFProbe([]string{"-i", fpath})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	probe, err := FFProbe(ctx, []string{"-i", fpath})
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}

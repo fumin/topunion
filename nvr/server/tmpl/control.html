@@ -4,18 +4,24 @@
 	<script src="/static/mpegts/mpegts.js"></script>
 
 	<script src="/static/util.js"></script>
+
+	<style>
+body {
+	font-size: 8vw;
+}
+	</style>
 </head>
 <body>
 
 <pre id="info"></pre>
 
 <div id="start-section">
-	<button id="start-btn" style="width: 100%; font-size: xx-large;">开始</button>
+	<button id="start-btn" style="width: 100%; font-size: 8vw;">开始</button>
 </div>
 <div id="stop-section">
-	<button id="stop-btn" style="width: 100%; font-size: xx-large;">停止</button>
+	<button id="stop-btn" style="width: 100%; font-size: 8vw;">停止</button>
 	<div id="cameras-div"></div>
-	<div>
+	<div style="margin-top: 1em;">
 		<span>详细信息：</span>
 		<a href="{{.Record.Link}}">{{.Record.ID}}</a>
 	</div>
@@ -40,6 +46,28 @@ function reqJSON(method, urlStr, loadEnd, okCallback) {
 	});
 	req.open(method, urlStr);
 	req.send();
+}
+
+function newCameraTitle(record, i) {
+	let cam = record.Camera[i];
+	let count = record.Count[i];
+
+	let title = document.createElement("h3");
+
+	let nameSpan = document.createElement("span");
+	nameSpan.textContent = `${cam.Name}：`;
+	title.appendChild(nameSpan);
+
+	let cnt = document.createElement("span");
+	cnt.id = `cnt-${record.ID}-${i}`;
+	cnt.textContent = `${count.Track.Count}`;
+	title.appendChild(cnt);
+
+	let ke = document.createElement("span");
+	ke.textContent = "颗";
+	title.appendChild(ke);
+
+	return {title: title, cnt: cnt};
 }
 
 function newVideo(camera) {
@@ -98,16 +126,9 @@ function displayRecord(record, stopURL, getURL) {
 		let div = document.createElement("div");
 		camerasDiv.appendChild(div);
 
-		let title = document.createElement("h3");
-		div.appendChild(title);
-		let danShu = document.createElement("span");
-		danShu.textContent = "蛋数：";
-		title.appendChild(danShu);
-		let cnt = document.createElement("span");
-		cnt.id = `cnt-${record.ID}-${i}`;
-		cnt.textContent = `${count.Track.Count}`;
-		title.appendChild(cnt);
-		cntSpans.push(cnt);
+		let tc = newCameraTitle(record, i);
+		div.appendChild(tc.title);
+		cntSpans.push(tc.cnt);
 
 		let videoElm = newVideo(cam);
 		div.appendChild(videoElm);

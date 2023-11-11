@@ -2,6 +2,7 @@ package ffmpeg
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -23,8 +24,8 @@ type ProbeOutput struct {
 	} `json:"format"`
 }
 
-func FFProbe(input []string) (ProbeOutput, error) {
-	cmd := exec.Command("ffprobe", append([]string{"-print_format", "json", "-show_format", "-show_streams"}, input...)...)
+func FFProbe(ctx context.Context, input []string) (ProbeOutput, error) {
+	cmd := exec.CommandContext(ctx, "ffprobe", append([]string{"-print_format", "json", "-show_format", "-show_streams"}, input...)...)
 	stdout, stderr := bytes.NewBuffer(nil), bytes.NewBuffer(nil)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	err := cmd.Run()

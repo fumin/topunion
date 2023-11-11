@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"math"
 	"os"
 	"os/exec"
@@ -56,7 +57,9 @@ func TestEgg(t *testing.T) {
 	count0.Config.AI.Yolo.Size = 640
 	record.Count = append(record.Count, count0)
 
-	id, err := s.startRecord(record)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	id, err := s.startRecord(ctx, record)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
@@ -130,12 +133,15 @@ func TestStartRecord(t *testing.T) {
 	count0.Config.AI.Yolo.Size = 640
 	record.Count = append(record.Count, count0)
 
-	id, err := s.startRecord(record)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	id, err := s.startRecord(ctx, record)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
 
-	var videoSecs float64 = 10
+	// Wait a bit more than HLSTime, so that nvr.Count.Prepare can successfully detect the index.m3u8.
+	var videoSecs float64 = 1.5 * (nvr.HLSTime)
 	<-time.After(time.Duration(videoSecs*1e9) * time.Nanosecond)
 
 	if err := s.records.cancel(id); err != nil {
@@ -161,12 +167,12 @@ func TestStartRecord(t *testing.T) {
 	}
 	if err != nil {
 		b, _ := os.ReadFile(filepath.Join(filepath.Dir(record.Count[0].Config.TrackIndex), util.StderrFilename))
-		t.Logf("%s", b)
+		t.Logf("dst \"%s\"", b)
 		t.Fatalf("%+v", err)
 	}
 
 	// Check video output.
-	probe, err := ffmpeg.FFProbe([]string{"-i", readRecord.Count[0].Config.TrackIndex})
+	probe, err := ffmpeg.FFProbe(context.Background(), []string{"-i", readRecord.Count[0].Config.TrackIndex})
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}

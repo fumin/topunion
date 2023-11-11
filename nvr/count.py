@@ -937,7 +937,6 @@ def mainWithErr(args):
         handleVideo("", warmup, handler)
         handler.afterWarmup()
 
-    firstVideo = True
     breakReason = ""
     stdinR = newStdinReader()
     threads = []
@@ -951,18 +950,13 @@ def mainWithErr(args):
 
         qu = queue.Queue(maxsize=1)
         stillRunning = list(filter(lambda t: t.is_alive(), threads))
-        # For the first video, do things synchronously, so that we get a video as soon as possible.
-        # If not, we may spawn too many threads, leading to resource contention and slow first video.
-        if firstVideo and False:
-            firstVideo = False
-            runBackground(qu, stillRunning, info)
-        else:
-            if len(stillRunning) > 4:
-                stillRunning[0].wait()
-            thrd = threading.Thread(target=runBackground, args=(qu, stillRunning, info))
-            thrd.start()
-            threads = [t for t in stillRunning]
-            threads.append(ThreadQueue(thrd, qu))
+        if len(stillRunning) > 8:
+            logging.info(_l("waitThreads", V=len(stillRunning)))
+            stillRunning[0].wait()
+        thrd = threading.Thread(target=runBackground, args=(qu, stillRunning, info))
+        thrd.start()
+        threads = [t for t in stillRunning]
+        threads.append(ThreadQueue(thrd, qu))
         ts.append({"name": "startBackground", "t": time.perf_counter()})
 
         if info.isEOF():

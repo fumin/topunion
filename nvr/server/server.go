@@ -46,9 +46,13 @@ const (
 )
 
 func StartRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}, error) {
-	id, err := startSMPTE(s)
-	// id, err := startVideoFile(s, "sample/shilin20230826.mp4")
-	// id, err := startVideoWifi(s)
+	// r := recordSMPTE()
+	// r := recordVideoFile("sample/shilin20230826.mp4")
+	record := recordCamera()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	id, err := s.startRecord(ctx, record)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
@@ -91,9 +95,14 @@ func Control(s *Server, w http.ResponseWriter, r *http.Request) {
 		GetURL   string
 	}{}
 
-	records := s.records.running()
-	if len(records) > 0 {
-		page.Record = s.displayRecord(records[0], PathMPEGTSServe)
+	ids := s.records.running()
+	if len(ids) > 0 {
+		r, err := nvr.GetRecord(s.DB, ids[0])
+		if err != nil {
+			http.Error(w, fmt.Sprintf("%+v", err), http.StatusInternalServerError)
+			return
+		}
+		page.Record = s.displayRecord(r, PathMPEGTSServe)
 	}
 
 	page.StartURL = PathStartRecord
@@ -128,15 +137,10 @@ func MPEGTSServe(s *Server, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	ifi, err := net.InterfaceByName("lo0")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 
-	conn, err := net.ListenMulticastUDP("udp", ifi, addr)
+	conn, err := net.ListenMulticastUDP("udp", util.LoopbackInterface, addr)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -367,16 +371,16 @@ func (m *recordMap) ips(id string) []string {
 	return ips
 }
 
-func (m *recordMap) running() []nvr.Record {
+func (m *recordMap) running() []string {
 	m.RLock()
 	defer m.RUnlock()
 
-	running := make([]nvr.Record, 0, len(m.m))
+	running := make([]string, 0, len(m.m))
 	for _, rr := range m.m {
 		if rr.canceled {
 			continue
 		}
-		running = append(running, rr.record)
+		running = append(running, rr.record.ID)
 	}
 	return running
 }
@@ -546,7 +550,7 @@ func recordLink(record nvr.Record) string {
 	return PathRecordPage + "?" + v.Encode()
 }
 
-func (s *Server) startRecord(record nvr.Record) (string, error) {
+func (s *Server) startRecord(ctx context.Context, record nvr.Record) (string, error) {
 	// Validate fields.
 	camNames := make(map[string]struct{}, len(record.Camera))
 	for _, cam := range record.Camera {
@@ -555,7 +559,7 @@ func (s *Server) startRecord(record nvr.Record) (string, error) {
 		}
 		camNames[cam.Name] = struct{}{}
 
-		if err := cam.Validate(); err != nil {
+		if err := cam.Validate(ctx); err != nil {
 			return "", errors.Wrap(err, fmt.Sprintf("%#v", cam))
 		}
 	}
@@ -644,7 +648,7 @@ func (s *Server) startRunningRecord(rr *runningRecord, recordsSet chan struct{})
 	// Prepare counts.
 	countDone := make([]chan struct{}, 0, len(rr.record.Count))
 	for i, c := range rr.record.Count {
-		if err := c.Prepare(); err != nil {
+		if err := c.Prepare(ctx); err != nil {
 			return errors.Wrap(err, "")
 		}
 
