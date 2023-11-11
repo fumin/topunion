@@ -16,8 +16,9 @@ import (
 )
 
 var (
-	addr      = flag.String("a", ":8080", "address to listen")
 	serverDir = flag.String("d", "devData", "server directory")
+	addr      = flag.String("a", ":8080", "address to listen")
+	multicast = flag.String("m", "239.0.0.0/28", "multicast subnet")
 )
 
 func daily(f func() error) {
@@ -47,7 +48,7 @@ func main() {
 }
 
 func mainWithErr() error {
-	s, err := server.NewServer(*serverDir, *addr)
+	s, err := server.NewServer(*serverDir, *addr, *multicast)
 	if err != nil {
 		return errors.Wrap(err, "")
 	}

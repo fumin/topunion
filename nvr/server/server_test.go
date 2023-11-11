@@ -18,17 +18,17 @@ import (
 )
 
 func TestEgg(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping test in short mode.")
 	}
 
-	t.Parallel()
 	dir, err := os.MkdirTemp("", "")
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
 	defer os.RemoveAll(dir)
-	s, err := NewServer(filepath.Join(dir, "server"), "")
+	s, err := NewServer(filepath.Join(dir, "server"), "", "239.0.0.16/28")
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
@@ -71,7 +71,10 @@ func TestEgg(t *testing.T) {
 				tracks = append(tracks, t)
 			}
 		}
-		if len(s.records.m) == 0 {
+		s.records.RLock()
+		numRunning := len(s.records.m)
+		s.records.RUnlock()
+		if numRunning == 0 {
 			break
 		}
 		<-time.After(time.Second)
@@ -101,7 +104,7 @@ func TestStartRecord(t *testing.T) {
 	if b, err := exec.Command(cmd[0], cmd[1:]...).CombinedOutput(); err != nil {
 		t.Fatalf("%+v %s", err, b)
 	}
-	s, err := NewServer(filepath.Join(dir, "server"), "")
+	s, err := NewServer(filepath.Join(dir, "server"), "", "239.0.0.0/28")
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}

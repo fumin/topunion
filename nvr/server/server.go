@@ -463,7 +463,7 @@ type Server struct {
 //go:embed static
 var staticFS embed.FS
 
-func NewServer(dir, addr string) (*Server, error) {
+func NewServer(dir, addr, multicast string) (*Server, error) {
 	s := &Server{}
 	s.ServeMux = http.NewServeMux()
 	s.Server.Addr = addr
@@ -489,7 +489,7 @@ func NewServer(dir, addr string) (*Server, error) {
 		return nil, errors.Wrap(err, "")
 	}
 
-	s.ips, err = newIPMap("239.0.0.1/24")
+	s.ips, err = newIPMap(multicast)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}

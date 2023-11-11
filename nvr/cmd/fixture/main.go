@@ -27,7 +27,7 @@ func main() {
 }
 
 func mainWithErr() error {
-	s, err := server.NewServer(*serverDir, "")
+	s, err := server.NewServer(*serverDir, "", "239.0.0.0/28")
 	if err != nil {
 		return errors.Wrap(err, "")
 	}

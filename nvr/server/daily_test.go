@@ -38,7 +38,7 @@ func TestDeleteOldVideos(t *testing.T) {
 			if b, err := exec.Command(cmd[0], cmd[1:]...).CombinedOutput(); err != nil {
 				t.Fatalf("%+v %s", err, b)
 			}
-			s, err := NewServer(filepath.Join(dir, "server"), "")
+			s, err := NewServer(filepath.Join(dir, "server"), "", "239.0.0.0/28")
 			if err != nil {
 				t.Fatalf("%+v", err)
 			}

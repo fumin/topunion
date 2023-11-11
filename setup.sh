@@ -149,7 +149,7 @@ EOM
 systemctl restart isc-dhcp-server.service
 
 # Confine multicast to loopback.
-ip route add 239.0.0.0/24 dev lo0
+ip route add 239.0.0.0/24 dev lo
 # Mac OSX
 # route -n add -net 239.0.0.0/24 -iface lo0
 # Windows
