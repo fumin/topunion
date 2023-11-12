@@ -1,0 +1,37 @@
+{
+"Dir": "devData",
+"Addr": ":8080",
+"Multicast": "239.0.0.0/28",
+"Camera": [{
+	"Name": "RedmiNote4X",
+	"Input": ["rtsp://admin:0000@{{.IP}}:8080/h264_ulaw.sdp"],
+	"NetworkInterface": "wlx08bfb849ed0a",
+	"MacAddress": "4c:49:e3:3a:87:4a"
+	},{
+	"Name": "Redmi12C",
+	"Input": ["rtsp://admin:0000@{{.IP}}:8080/h264_ulaw.sdp"],
+	"NetworkInterface": "wlx08bfb849ed0a",
+	"MacAddress": "f4:1a:9c:67:58:ee"
+	},{
+	"Name": "FuminPhone",
+	"Input": ["rtsp://admin:0000@{{.IP}}:8080/h264_ulaw.sdp"],
+	"NetworkInterface": "wlx08bfb849ed0a",
+	"MacAddress": "94:7b:ae:94:ca:80"
+	}],
+"Count": [{
+	"Src": "RedmiNote4X",
+	"Config": {
+		"AI": {
+			"Smart": true,
+			"Device": "cuda:0",
+			"Mask": {
+				"Enable": false
+			},
+			"Yolo": {
+				"Weights": "yolo_best.pt",
+				"Size": 640
+			}
+		}
+	}
+}]
+}

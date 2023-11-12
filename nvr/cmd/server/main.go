@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"flag"
 	"log"
 	"net/http"
@@ -16,10 +17,28 @@ import (
 )
 
 var (
-	serverDir = flag.String("d", "devData", "server directory")
-	addr      = flag.String("a", ":8080", "address to listen")
-	multicast = flag.String("m", "239.0.0.0/28", "multicast subnet")
+	configPath = flag.String("c", "server/config/smpte.json", "configuration path")
 )
+
+func readConfig(fpath string) (server.Config, error) {
+	b, err := os.ReadFile(fpath)
+	if err != nil {
+		return server.Config{}, errors.Wrap(err, "")
+	}
+	var config server.Config
+	if err := json.Unmarshal(b, &config); err != nil {
+		return server.Config{}, errors.Wrap(err, "")
+	}
+	return config, nil
+}
+
+func printConfig(config server.Config) {
+	b, err := json.Marshal(config)
+	if err != nil {
+		log.Fatalf("%+v", err)
+	}
+	log.Printf("%s", b)
+}
 
 func daily(f func() error) {
 	go func() {
@@ -48,7 +67,13 @@ func main() {
 }
 
 func mainWithErr() error {
-	s, err := server.NewServer(*serverDir, *addr, *multicast)
+	config, err := readConfig(*configPath)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	printConfig(config)
+
+	s, err := server.NewServer(config)
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
@@ -73,7 +98,7 @@ func mainWithErr() error {
 			log.Printf("HTTP server Shutdown: %+v", err)
 		}
 	}()
-	log.Printf("listening at %s", s.Server.Addr)
+	log.Printf("listening at %s", s.C.Addr)
 	if err := s.Server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Printf("%+v", err)
 	}

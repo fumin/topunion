@@ -27,7 +27,8 @@ func main() {
 }
 
 func mainWithErr() error {
-	s, err := server.NewServer(*serverDir, "", "239.0.0.0/28")
+	config := server.Config{Dir: *serverDir, Multicast: "239.0.0.0/28"}
+	s, err := server.NewServer(config)
 	if err != nil {
 		return errors.Wrap(err, "")
 	}

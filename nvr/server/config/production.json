@@ -1,0 +1,37 @@
+{
+"Dir": "/var/nvr",
+"Addr": ":18888",
+"Multicast": "239.0.0.0/28",
+"Camera": [{
+	"Name": "RedmiNote4X",
+	"Input": ["rtsp://admin:0000@{{.IP}}:8080/h264_ulaw.sdp"],
+        "NetworkInterface": "wlx08bfb849ed0a",
+        "MacAddress": "4c:49:e3:3a:87:4a"
+}],
+"Count": [{
+	"Src": "RedmiNote4X",
+	"Config": {
+		"AI": {
+			"Smart": true,
+			"Device": "cuda:0",
+			"Mask": {
+				"Enable": false,
+				"Crop": {
+					"X": 100,
+					"Y": 0,
+					"W": 1700
+				},
+				"Mask": {
+					"Slope": 10,
+					"Y": 500,
+					"H": 200
+				}
+			},
+			"Yolo": {
+				"Weights": "/var/nvr/yolo_best.pt",
+				"Size": 640
+			}
+		}
+	}
+}]
+}

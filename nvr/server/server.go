@@ -46,9 +46,12 @@ const (
 )
 
 func StartRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}, error) {
-	// r := recordSMPTE()
-	// r := recordVideoFile("sample/shilin20230826.mp4")
-	record := recordCamera()
+	record := nvr.Record{
+		Camera: make([]nvr.Camera, len(s.C.Camera)),
+		Count:  make([]nvr.Count, len(s.C.Count)),
+	}
+	copy(record.Camera, s.C.Camera)
+	copy(record.Count, s.C.Count)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -451,6 +454,8 @@ func (m *ipMap) putBack(ips []string) {
 }
 
 type Server struct {
+	C Config
+
 	ServeMux *http.ServeMux
 	Server   http.Server
 
@@ -467,20 +472,20 @@ type Server struct {
 //go:embed static
 var staticFS embed.FS
 
-func NewServer(dir, addr, multicast string) (*Server, error) {
-	s := &Server{}
+func NewServer(config Config) (*Server, error) {
+	s := &Server{C: config}
 	s.ServeMux = http.NewServeMux()
-	s.Server.Addr = addr
+	s.Server.Addr = s.C.Addr
 	s.Server.Handler = s.ServeMux
 
-	s.ScriptDir = filepath.Join(dir, "script")
+	s.ScriptDir = filepath.Join(s.C.Dir, "script")
 	var err error
 	s.Scripts, err = nvr.NewScripts(s.ScriptDir)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
 
-	dbPath := filepath.Join(dir, "db.sqlite")
+	dbPath := filepath.Join(s.C.Dir, "db.sqlite")
 	dbV := url.Values{}
 	dbV.Set("_journal_mode", "WAL")
 	s.DB, err = sql.Open("sqlite3", "file:"+dbPath+"?"+dbV.Encode())
@@ -488,12 +493,12 @@ func NewServer(dir, addr, multicast string) (*Server, error) {
 		return nil, errors.Wrap(err, "")
 	}
 
-	s.RecordDir = filepath.Join(dir, "record")
+	s.RecordDir = filepath.Join(s.C.Dir, "record")
 	if err := os.MkdirAll(s.RecordDir, os.ModePerm); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
 
-	s.ips, err = newIPMap(multicast)
+	s.ips, err = newIPMap(s.C.Multicast)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
@@ -552,6 +557,9 @@ func recordLink(record nvr.Record) string {
 
 func (s *Server) startRecord(ctx context.Context, record nvr.Record) (string, error) {
 	// Validate fields.
+	if len(record.Camera) == 0 {
+		return "", errors.Errorf("no camera")
+	}
 	camNames := make(map[string]struct{}, len(record.Camera))
 	for _, cam := range record.Camera {
 		if _, ok := camNames[cam.Name]; ok {
@@ -561,6 +569,23 @@ func (s *Server) startRecord(ctx context.Context, record nvr.Record) (string, er
 
 		if err := cam.Validate(ctx); err != nil {
 			return "", errors.Wrap(err, fmt.Sprintf("%#v", cam))
+		}
+	}
+	// Sources of record.Count must be one of the cameras.
+	// Sources of record.Count must also be unique.
+	countSrcs := make(map[string]struct{}, len(record.Count))
+	for _, count := range record.Count {
+		if _, ok := camNames[count.Src]; !ok {
+			return "", errors.Errorf("%#v %#v", count, camNames)
+		}
+
+		if _, ok := countSrcs[count.Src]; ok {
+			return "", errors.Errorf("duplicate src %s %#v", count.Src, countSrcs)
+		}
+		countSrcs[count.Src] = struct{}{}
+
+		if err := count.Validate(ctx, s.Scripts.Count); err != nil {
+			return "", errors.Wrap(err, "")
 		}
 	}
 

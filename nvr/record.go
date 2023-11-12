@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"html/template"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -16,7 +17,6 @@ import (
 	"github.com/pkg/errors"
 
 	"nvr/arp"
-	"nvr/cuda"
 	"nvr/ffmpeg"
 	"nvr/util"
 )
@@ -120,13 +120,57 @@ func (c Count) Fill(recordDir string) Count {
 	return c
 }
 
-func (c Count) Prepare(ctx context.Context) error {
-	if strings.HasPrefix(c.Config.AI.Device, "cuda") {
-		if !cuda.IsAvailable() {
-			return errors.Errorf("no cuda")
-		}
+func (c Count) Validate(ctx context.Context, script string) error {
+	dir, err := os.MkdirTemp("", "")
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	defer os.RemoveAll(dir)
+
+	// Prepare src.
+	srcDir := filepath.Join(dir, "src")
+	if err := os.MkdirAll(srcDir, os.ModePerm); err != nil {
+		return errors.Wrap(err, "")
+	}
+	cmd := strings.Split("ffmpeg -f lavfi -i smptebars -t 0.1 -f mpegts "+filepath.Join(srcDir, "0.ts"), " ")
+	if b, err := exec.CommandContext(ctx, cmd[0], cmd[1:]...).CombinedOutput(); err != nil {
+		return errors.Wrap(err, fmt.Sprintf("%s", b))
+	}
+	b := `#EXTM3U
+#EXTINF:0.1,
+0.ts
+#EXT-X-ENDLIST`
+	src := filepath.Join(srcDir, IndexM3U8)
+	if err := os.WriteFile(src, []byte(b), os.ModePerm); err != nil {
+		return errors.Wrap(err, fmt.Sprintf("\"%s\"", src))
 	}
 
+	// Prepare config.
+	dstDir := filepath.Join(dir, "dst")
+	if err := os.MkdirAll(dstDir, os.ModePerm); err != nil {
+		return errors.Wrap(err, "")
+	}
+	dst := filepath.Join(dstDir, IndexM3U8)
+	var config CountConfig
+	config = c.Config
+	config.Src = src
+	config.TrackIndex = dst
+	config.TrackLog = filepath.Join(filepath.Dir(dst), "track.json")
+	cfg, err := json.Marshal(config)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+
+	// Check that config works.
+	stdouterr, err := exec.CommandContext(ctx, Python, script, "-c="+string(cfg)).CombinedOutput()
+	if err != nil {
+		return errors.Wrap(err, fmt.Sprintf("\"%s\"", stdouterr))
+	}
+
+	return nil
+}
+
+func (c Count) Prepare(ctx context.Context) error {
 	if err := os.MkdirAll(filepath.Dir(c.Config.TrackIndex), os.ModePerm); err != nil {
 		return errors.Wrap(err, "")
 	}

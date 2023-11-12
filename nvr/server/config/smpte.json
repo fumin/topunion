@@ -1,0 +1,35 @@
+{
+"Dir": "devData",
+"Addr": ":8080",
+"Multicast": "239.0.0.0/28",
+"Camera": [{
+	"Name": "smpte0",
+	"Input": ["-re", "-f", "lavfi", "-i", "smptebars"]
+	},{
+	"Name": "smpte1",
+	"Input": ["-re", "-f", "lavfi", "-i", "smptebars"]
+	}],
+"Count": [{
+	"Src": "smpte0",
+	"Config": {
+		"AI": {
+			"Smart": false,
+			"Device": "cpu",
+			"Mask": {
+				"Enable": false
+			}
+		}
+	}
+	},{
+	"Src": "smpte1",
+	"Config": {
+		"AI": {
+			"Smart": false,
+			"Device": "cpu",
+			"Mask": {
+				"Enable": false
+			}
+		}
+	}
+	}]
+}

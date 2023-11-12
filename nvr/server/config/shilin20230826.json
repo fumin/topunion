@@ -1,0 +1,36 @@
+{
+"Dir": "devData",
+"Addr": ":8080",
+"Multicast": "239.0.0.0/28",
+"Camera": [{
+	"Name": "shilin20230826",
+	"Input": ["sample/shilin20230826.mp4"],
+	"Repeat": 1
+}],
+"Count": [{
+	"Src": "shilin20230826",
+	"Config": {
+		"AI": {
+			"Smart": true,
+			"Device": "cuda:0",
+			"Mask": {
+				"Enable": true,
+				"Crop": {
+					"X": 100,
+					"Y": 0,
+					"W": 1700
+				},
+				"Mask": {
+					"Slope": 10,
+					"Y": 500,
+					"H": 200
+				}
+			},
+			"Yolo": {
+				"Weights": "yolo_best.pt",
+				"Size": 640
+			}
+		}
+	}
+}]
+}
