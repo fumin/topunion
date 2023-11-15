@@ -109,6 +109,7 @@ func CountFn(dir, script string, cfg CountConfig) func(context.Context) {
 
 func RecordVideoFn(dir string, getInput func() ([]string, string, error)) func(context.Context) {
 	const program = "ffmpeg"
+	const fps = 30
 	const hlsFlags = "" +
 		// Append to the same HLS index file.
 		"append_list" +
@@ -131,6 +132,9 @@ func RecordVideoFn(dir string, getInput func() ([]string, string, error)) func(c
 		indexFName := filepath.Join(dir, IndexM3U8)
 		teeHLS := "[" + strings.Join([]string{
 			"f=hls",
+			"fifo_options=" + ffmpeg.TeeEscape([]string{
+				"queue_size=" + strconv.Itoa(60*fps),
+			}),
 			// 10 seconds per segment.
 			"hls_time=" + strconv.Itoa(HLSTime),
 			// No limit on number of segments.
@@ -138,10 +142,21 @@ func RecordVideoFn(dir string, getInput func() ([]string, string, error)) func(c
 			// Use strftime syntax for segment filenames.
 			"strftime=1",
 			"hls_flags=" + hlsFlags,
-			"hls_segment_filename=" + ffmpeg.Escape(ffmpeg.TeeEscape(segmentFName)),
-		}, ":") + "]" + ffmpeg.Escape(indexFName)
-		teeUDP := fmt.Sprintf("[f=mpegts]udp://%s/?pkt_size=%d", multicastAddr, util.VLCUDPLen)
-		arg := append(input, []string{
+			"hls_segment_filename=" + ffmpeg.TeeEscape([]string{segmentFName}),
+		}, ":") + "]" + indexFName
+		udpOutput := fmt.Sprintf("udp://%s/?pkt_size=%d", multicastAddr, util.VLCUDPLen)
+
+		teeUDP := "[" + strings.Join([]string{
+			"f=mpegts",
+			"fifo_options=" + ffmpeg.TeeEscape([]string{
+				"queue_size=" + strconv.Itoa(60*fps),
+				// The below options are not supported ffmpeg 4.4.2.
+				// "drop_pkts_on_overflow=1",
+				// "attempt_recovery=1",
+				// "recover_any_error=1",
+			}),
+		}, ":") + "]" + udpOutput
+		arg := ffmpeg.Escape(append(input, []string{
 			// No audio.
 			"-an",
 			// Variable frame rate, otherwise the HLS codec fails.
@@ -152,8 +167,8 @@ func RecordVideoFn(dir string, getInput func() ([]string, string, error)) func(c
 			// H264 high profile level 4.2 for maximum support across devices.
 			"-profile:v", "high", "-level:v", "4.2",
 			// Tee multiple outputs.
-			"-f", "tee", "-map", "0:v", teeHLS + "|" + teeUDP,
-		}...)
+			"-f", "tee", "-map", "0:v", "-use_fifo", "1", teeHLS + "|" + teeUDP,
+		}...))
 		cmd := exec.CommandContext(ctx, program, arg...)
 		stdin, err := cmd.StdinPipe()
 		if err != nil {

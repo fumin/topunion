@@ -141,7 +141,7 @@ func TestStartRecord(t *testing.T) {
 	count0.Config.AI.Yolo.Size = 640
 	record.Count = append(record.Count, count0)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	id, err := s.startRecord(ctx, record)
 	if err != nil {

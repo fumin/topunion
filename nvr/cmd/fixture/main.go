@@ -14,7 +14,8 @@ import (
 )
 
 var (
-	serverDir = flag.String("d", "devData", "server directory")
+	serverDir    = flag.String("d", "devData", "server directory")
+	shouldInsert = flag.Bool("i", false, "should insert fake data")
 )
 
 func main() {
@@ -37,6 +38,10 @@ func mainWithErr() error {
 	if err := nvr.CreateTables(s.DB); err != nil {
 		return errors.Wrap(err, "")
 	}
+	if !*shouldInsert {
+		return nil
+	}
+
 	if err := insertRecords(s); err != nil {
 		return errors.Wrap(err, "")
 	}

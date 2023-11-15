@@ -576,7 +576,7 @@ func (s *Server) startRecord(ctx context.Context, record nvr.Record) (string, er
 	countSrcs := make(map[string]struct{}, len(record.Count))
 	for _, count := range record.Count {
 		if _, ok := camNames[count.Src]; !ok {
-			return "", errors.Errorf("%#v %#v", count, camNames)
+			return "", errors.Errorf("%s %#v", count.Src, camNames)
 		}
 
 		if _, ok := countSrcs[count.Src]; ok {

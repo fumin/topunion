@@ -3,13 +3,13 @@
 "Addr": ":18888",
 "Multicast": "239.0.0.0/28",
 "Camera": [{
-	"Name": "RedmiNote4X",
-	"Input": ["rtsp://admin:0000@{{.IP}}:8080/h264_ulaw.sdp"],
+	"Name": "FuminPhone",
+	"Input": ["-rtsp_transport", "tcp", "-i", "rtsp://admin:0000@{{.IP}}:8080/h264_ulaw.sdp"],
         "NetworkInterface": "wlx08bfb849ed0a",
-        "MacAddress": "4c:49:e3:3a:87:4a"
+        "MacAddress": "94:7b:ae:94:ca:80"
 }],
 "Count": [{
-	"Src": "RedmiNote4X",
+	"Src": "FuminPhone",
 	"Config": {
 		"AI": {
 			"Smart": true,

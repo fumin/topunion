@@ -25,13 +25,14 @@ type ProbeOutput struct {
 }
 
 func FFProbe(ctx context.Context, input []string) (ProbeOutput, error) {
-	cmd := exec.CommandContext(ctx, "ffprobe", append([]string{"-print_format", "json", "-show_format", "-show_streams"}, input...)...)
+	progArg := append([]string{"ffprobe", "-print_format", "json", "-show_format", "-show_streams"}, input...)
+	cmd := exec.CommandContext(ctx, progArg[0], progArg[1:]...)
 	stdout, stderr := bytes.NewBuffer(nil), bytes.NewBuffer(nil)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	err := cmd.Run()
 	stdoutB, stderrB := stdout.Bytes(), stderr.Bytes()
 	if err != nil {
-		return ProbeOutput{}, errors.Wrap(err, fmt.Sprintf("stdout: %s, stderr: %s", stdoutB, stderrB))
+		return ProbeOutput{}, errors.Wrap(err, fmt.Sprintf("%s, stdout: %s, stderr: %s", strings.Join(progArg, " "), stdoutB, stderrB))
 	}
 
 	var out ProbeOutput
@@ -67,15 +68,24 @@ func FixFFProbeInput(input []string) []string {
 
 // Escape escapes ffmpeg strings.
 // https://ffmpeg.org/ffmpeg-utils.html#quoting_005fand_005fescaping
-func Escape(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	return s
+func Escape(options []string) []string {
+	escaped := make([]string, 0, len(options))
+	for _, s := range options {
+		s = strings.ReplaceAll(s, `\`, `\\`)
+		escaped = append(escaped, s)
+	}
+	return escaped
 }
 
 // TeeEscape escapes strings inside a tee muxer option.
 // https://ffmpeg.org/ffmpeg-formats.html#Options-17
-func TeeEscape(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, ":", `\:`)
-	return s
+func TeeEscape(options []string) string {
+	escaped := make([]string, 0, len(options))
+	for _, s := range options {
+		s = strings.ReplaceAll(s, `\`, `\\`)
+		s = strings.ReplaceAll(s, ":", `\:`)
+		escaped = append(escaped, s)
+	}
+	joined := strings.Join(escaped, ":")
+	return joined
 }
