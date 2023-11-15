@@ -35,6 +35,11 @@ apt install -y vim git
 # git config --global user.name "Your Name"
 git config --global core.editor "vim"
 
+# Make wifi fully functioning to increase its speed.
+# This is important, since install cuda downloads several GB of data.
+apt install -y iw
+iw reg set US
+
 wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
 dpkg -i cuda-keyring_1.1-1_all.deb
 rm cuda-keyring*
@@ -164,7 +169,7 @@ EOM
 # Windows
 # route add 239.0.0.0 MASK 255.255.255.0 127.0.0.1
 
-apt install -y python-is-python3 python3-pip sqlite3 ffmpeg xclip v4l-utils net-tools arp-scan iw curl tree gnuradio
+apt install -y python-is-python3 python3-pip sqlite3 ffmpeg xclip v4l-utils net-tools arp-scan curl tree gnuradio
 snap install wps-office
 
 # Debian stupidlly removed ffmpeg's ability to play RTSP streams.
