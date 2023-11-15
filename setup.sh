@@ -48,7 +48,7 @@ dpkg -i cuda-keyring_1.1-1_all.deb
 rm cuda-keyring*
 apt update
 apt install -y language-pack-gnome-zh-hans fonts-noto-cjk-extra ibus-libpinyin
-apt install -y nvidia-driver-535
+# apt install -y nvidia-driver-535
 # reboot
 apt install -y --allow-downgrades cuda=11.8.0-1
 cat > saxpy.cu <<- EOM

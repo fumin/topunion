@@ -9,11 +9,8 @@
 	{{range .Camera}}
 	<div>
 		<h3>{{.Name}}</h3>
-		{{if .MPEGTS}}
-		<a href="{{.MPEGTS}}">直播</a>
-		{{else}}
+		{{if .MPEGTS}}<a href="{{.MPEGTS}}">直播</a>{{end}}
 		<a href="{{.Video}}">视频</a>
-		{{end}}
 		{{if .Input}}<div>輸入：{{.Input}}</div>{{end}}
 		<div>网络接口：{{.NetworkInterface}}</div>
 		<div>MAC地址：{{.MacAddress}}</div>

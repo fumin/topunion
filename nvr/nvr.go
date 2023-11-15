@@ -149,9 +149,9 @@ func RecordVideoFn(dir string, getInput func() ([]string, string, error)) func(c
 		teeUDP := "[" + strings.Join([]string{
 			"f=mpegts",
 			"fifo_options=" + ffmpeg.TeeEscape([]string{
-				"queue_size=" + strconv.Itoa(60*fps),
+				// "queue_size=" + strconv.Itoa(60*fps),
 				// The below options are not supported ffmpeg 4.4.2.
-				// "drop_pkts_on_overflow=1",
+				"drop_pkts_on_overflow=1",
 				// "attempt_recovery=1",
 				// "recover_any_error=1",
 			}),
@@ -160,8 +160,8 @@ func RecordVideoFn(dir string, getInput func() ([]string, string, error)) func(c
 			// No audio.
 			"-an",
 			// Variable frame rate, otherwise the HLS codec fails.
-			"-vsync", "vfr", // for old versions of ffmpeg
-			// "-fps_mode:v:0", "vfr",
+			// "-vsync", "vfr", // for old versions of ffmpeg
+			"-fps_mode:v:0", "vfr",
 			// Use H254 encoding.
 			"-c:v", "libx264",
 			// H264 high profile level 4.2 for maximum support across devices.
