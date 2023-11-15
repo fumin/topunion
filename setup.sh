@@ -16,10 +16,13 @@ mv /usr/bin/update-manager /usr/bin/update-manager-xxx
 mv /usr/bin/update-notifier /usr/bin/update-notifier-xxx
 # mv /usr/local/firefox/updater /usr/local/firefox/updater-xxx
 
+FFMPEG_DIR=/usr/local/ffmpeg-6.0.1-amd64-static
+
 # Add `source .mybashrc` to .bashrc
 cat > .mybashrc <<- EOM
 export PATH=\$PATH:/usr/local/go/bin:\$HOME/go/bin
 export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:/usr/local/cuda/lib64
+export PATH=$FFMPEG_DIR:\$PATH
 
 alias pbcopy='xclip -selection clipboard'
 alias pbpaste='xclip -selection clipboard -o'
@@ -169,10 +172,18 @@ EOM
 # Windows
 # route add 239.0.0.0 MASK 255.255.255.0 127.0.0.1
 
-apt install -y python-is-python3 python3-pip sqlite3 ffmpeg xclip v4l-utils net-tools arp-scan curl tree gnuradio
+apt install -y python-is-python3 python3-pip sqlite3 xclip ffmpeg v4l-utils net-tools arp-scan curl tree gnuradio
 snap install wps-office
 
-# Debian stupidlly removed ffmpeg's ability to play RTSP streams.
+if [ ! -d $FFMPEG_DIR ]; then
+        cd /tmp
+        curl -O -C - --retry 999 https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+        tar xf ffmpeg-release-amd64-static.tar.xz
+        mv ffmpeg-6.0.1-amd64-static $FFMPEG_DIR
+	cd $HOME
+fi
+
+# Debian stupidlly removed vls and ffmpeg's ability to play RTSP streams.
 # https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=982299
 snap install vlc
 
