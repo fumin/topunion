@@ -39,8 +39,8 @@ wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/
 dpkg -i cuda-keyring_1.1-1_all.deb
 rm cuda-keyring*
 apt update
-apt install -y language-pack-zh-hans fonts-noto-cjk-extra ibus-libpinyin
-apt install -y nvidia-driver-535=535.104.12-0ubuntu1
+apt install -y language-pack-gnome-zh-hans fonts-noto-cjk-extra ibus-libpinyin
+apt install -y nvidia-driver-535
 # reboot
 apt install -y --allow-downgrades cuda=11.8.0-1
 cat > saxpy.cu <<- EOM
@@ -150,8 +150,14 @@ EOM
 systemctl restart isc-dhcp-server.service
 
 # Confine multicast to loopback.
-cat > /etc/cron.d/multicast <<- EOM
-@reboot root ip route add 239.0.0.0/24 scope host dev lo
+IP_SCRIPT=/usr/local/bin/ip_init.sh
+cat > $IP_SCRIPT <<-EOM
+ip link set lo multicast on
+ip route add 239.0.0.0/24 scope host dev lo
+EOM
+chmod +x $IP_SCRIPT
+cat > /etc/cron.d/ip_init <<-EOM
+@reboot root $IP_SCRIPT
 EOM
 # Mac OSX
 # route -n add -net 239.0.0.0/24 -iface lo0
