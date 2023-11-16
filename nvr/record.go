@@ -66,7 +66,7 @@ func (cam Camera) getInput() ([]string, error) {
 		}
 		hw, ok := hws[cam.MacAddress]
 		if !ok {
-			return nil, errors.Errorf("%#v", hws)
+			return nil, errors.Errorf("mac address \"%s\" not found in %#v", cam.MacAddress, hws)
 		}
 		data := struct{ IP string }{IP: hw.IP}
 		buf := bytes.NewBuffer(nil)
