@@ -124,6 +124,7 @@ netplan --debug apply
 # This is because netplan has bugs that prevent automatically scanning 5G networks.
 SCAN_SCRIPT=/usr/local/bin/scan_${WIFI_LAN_IFACE}.sh
 cat > $SCAN_SCRIPT <<- EOM
+#!/bin/bash
 for (( i = 0; i < 5*60; i++ )); do
         SCANOUT=\$(sudo iw dev ${WIFI_LAN_IFACE} scan -u)
         echo "\$SCANOUT"
