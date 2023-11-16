@@ -172,7 +172,7 @@ EOM
 # Windows
 # route add 239.0.0.0 MASK 255.255.255.0 127.0.0.1
 
-apt install -y python-is-python3 python3-pip sqlite3 xclip ffmpeg v4l-utils net-tools arp-scan curl tree gnuradio
+apt install -y cmake python-is-python3 python3-pip sqlite3 xclip ffmpeg v4l-utils net-tools arp-scan curl tree gnuradio htop
 snap install wps-office
 
 if [ ! -d $FFMPEG_DIR ]; then
@@ -200,23 +200,31 @@ if [ "$GOVERSION" != "go version go1.21.3 linux/amd64" ]; then
 fi
 sudo -u $MYUSER $GOBINFULL install golang.org/x/tools/cmd/goimports@latest
 
-sudo -u $MYUSER pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+SITE_PACKAGES=$(python -m site --user-site)
+if [ ! -d $SITE_PACKAGES/torch ]; then
+	mkdir $HOME/whl
+	cd $HOME/whl
+	sudo -u $MYUSER pip3 download torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+	sudo -u $MYUSER pip3 install ./*
+	cd $HOME
+fi
 
-sudo -u $MYUSER pip install cython
-sudo -u $MYUSER pip install cython_bbox matplotlib ipympl opencv-python jupyterlab av
+# detectron2 must be installed right after torch.
+# This is because detectron2 compilation can easily fail after installing other packages.
+# https://github.com/facebookresearch/detectron2/issues/5152
+if [ ! -d $SITE_PACKAGES/detectron2 ]; then
+	cd $SITE_PACKAGES
+	sudo -u $MYUSER git clone https://github.com/facebookresearch/detectron2.git
+	sudo -u $MYUSER python -m pip install -e detectron2
+	cd $HOME
+fi
+
+sudo -u $MYUSER pip install matplotlib ipympl opencv-python jupyterlab av
 
 if [ ! -d /usr/local/klipper ]; then
 	cd /tmp
 	git clone https://github.com/Klipper3d/klipper.git
 	mv klipper /usr/local
-	cd $HOME
-fi
-
-SITE_PACKAGES=$(python -m site --user-site)
-if [ ! -d $SITE_PACKAGES/detectron2 ]; then
-	cd $SITE_PACKAGES
-	sudo -u $MYUSER git clone https://github.com/facebookresearch/detectron2.git
-	sudo -u $MYUSER python -m pip install -e detectron2
 	cd $HOME
 fi
 
@@ -230,13 +238,23 @@ fi
 
 if [ ! -d $SITE_PACKAGES/ByteTrack ]; then
 	cd $SITE_PACKAGES
-	git clone https://github.com/ifzhang/ByteTrack.git
+	sudo -u $MYUSER git clone https://github.com/ifzhang/ByteTrack.git
 	cd ByteTrack
-	pip3 install -r requirements.txt
-	python3 setup.py develop
+	sudo -u $MYUSER pip3 install -r requirements.txt
+	sudo -u $MYUSER python -m pip install -e ByteTrack
+
+
+	sudo -u $MYUSER pip install cython_bbox
+	# cython_bbox breaks cocoapi, so reinstall it.
+	sudo -u $MYUSER pip3 install 'git+https://github.com/cocodataset/cocoapi.git#subdirectory=PythonAPI'
+
+	# ByteTrack breaks these libraries, so reinstall them.
+	sudo -u $MYUSER pip uninstall -y lap
+	sudo -u $MYUSER pip install lap
+	sudo -u $MYUSER pip uninstall -y psutil
+	sudo -u $MYUSER pip install psutil
 fi
 
-sudo -u $MYUSER pip install loguru lap
 if [ ! -d $SITE_PACKAGES/ultralytics ]; then
 	cd $SITE_PACKAGES
 	sudo -u $MYUSER git clone https://github.com/ultralytics/ultralytics.git
