@@ -2,13 +2,17 @@
 <html>
 <head>
 	<script src="/static/mpegts/mpegts.js"></script>
+	<script src="/static/hls.js"></script>
 
 	<script src="/static/util.js"></script>
 
 	<style>
+/*
 body {
 	font-size: 8vw;
 }
+*/
+
 	</style>
 </head>
 <body>
@@ -132,7 +136,7 @@ function displayRecord(record, stopURL, getURL) {
 
 		let videoElm = newVideo(cam);
 		div.appendChild(videoElm);
-		util.playMPEGTS(videoElm, cam.MPEGTS);
+		util.playHLS(videoElm, count.TrackVideo);
 	}
 
 	let callback = function(r) {

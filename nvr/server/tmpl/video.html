@@ -2,6 +2,7 @@
 <html>
 <head>
 	<script src="/static/hls.js"></script>
+	<script src="/static/util.js"></script>
 </head>
 <body>
 <div id="info"></div>
@@ -11,38 +12,7 @@
 let page = {{.}};
 
 let video = document.querySelector("#video");
-if (Hls.isSupported()) {
-	let config = {
-		liveSyncDurationCount: 1,
-		liveMaxLatencyDurationCount: 5,
-		liveDurationInfinity: true,
-	};
-	let hls = new Hls(config);
-	hls.on(Hls.Events.ERROR, function(event, data){
-		let errorType = data.type;
-		let errorDetails = data.details;
-		let errorFatal = data.fatal;
-		console.log(errorType, errorDetails, errorFatal, event, data);
-
-		if (errorFatal) {
-			switch (errorDetails) {
-			case Hls.ErrorDetails.MANIFEST_LOAD_ERROR:
-			case Hls.ErrorDetails.LEVEL_EMPTY_ERROR:
-				let secs = 1;
-				setTimeout(function(){
-					window.location.reload();
-				}, secs*1000);
-			}
-		}
-	});
-	hls.loadSource(page.Src);
-	hls.attachMedia(video);
-} else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-	video.src = page.Src;
-} else {
-	let info = document.querySelector("#info");
-	info.textContent = "Your browser does not support HLS.";
-}
+util.playHLS(video, page.Src);
 </script>
 </body>
 </html>

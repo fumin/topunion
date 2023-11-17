@@ -53,7 +53,7 @@ func StartRecord(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	copy(record.Camera, s.C.Camera)
 	copy(record.Count, s.C.Count)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	id, err := s.startRecord(ctx, record)
 	if err != nil {
@@ -106,6 +106,9 @@ func Control(s *Server, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		page.Record = s.displayRecord(r, PathMPEGTSServe)
+	}
+	for i, c := range page.Record.Count {
+		page.Record.Count[i].TrackVideo = s.hlsIndex(c.Config.TrackIndex)
 	}
 
 	page.StartURL = PathStartRecord
@@ -229,7 +232,12 @@ func RecordPage(s *Server, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("%+v", err), http.StatusInternalServerError)
 		return
 	}
+
 	record = s.displayRecord(record, PathMPEGTS)
+	for i, c := range record.Count {
+		record.Count[i].TrackVideo = s.videoURL(c.Config.TrackIndex)
+	}
+
 	if err := recordPageTmpl.Execute(w, record); err != nil {
 		log.Printf("%+v", err)
 	}
@@ -784,25 +792,20 @@ func (s *Server) displayRecord(r nvr.Record, mpegtsPath string) nvr.Record {
 	r.Link = recordLink(r)
 
 	// Camera fields.
-	var ips []string
-	if r.Stop.IsZero() {
-		ips = s.records.ips(r.ID)
-	}
+	// var ips []string
+	// if r.Stop.IsZero() {
+	// 	ips = s.records.ips(r.ID)
+	// }
 	rDir := nvr.RecordDir(s.RecordDir, r.ID)
 	for i, cam := range r.Camera {
 		indexPath := filepath.Join(rDir, cam.Name, nvr.IndexM3U8)
 		r.Camera[i].Video = s.videoURL(indexPath)
 
-		if len(ips) > 0 {
-			v := url.Values{}
-			v.Set("a", ffmpegMulticast(ips[i]))
-			r.Camera[i].MPEGTS = mpegtsPath + "?" + v.Encode()
-		}
-	}
-
-	// Count fields.
-	for i, c := range r.Count {
-		r.Count[i].TrackVideo = s.videoURL(c.Config.TrackIndex)
+		// if len(ips) > 0 {
+		// 	v := url.Values{}
+		// 	v.Set("a", ffmpegMulticast(ips[i]))
+		// 	r.Camera[i].MPEGTS = mpegtsPath + "?" + v.Encode()
+		// }
 	}
 
 	return r
