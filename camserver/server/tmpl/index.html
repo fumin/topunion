@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<style>
+body {
+	font-size: 4vw;
+}
+
+table, th, td {
+	border: 1px solid black;
+	border-collapse: collapse;
+}
+
+.alert {
+  animation: alertKeyframes 2s infinite;
+}
+@keyframes alertKeyframes {
+  0% {color: inherit;}
+  50% {color: red;}
+  100% {color: inherit;}
+}
+	</style>
+</head>
+<body>
+<h1><img src="/static/logo.jpg" style="vertical-align: bottom; height: 1.5em;">上聯智能鸡蛋计数系统</h1>
+<pre id="info"></pre>
+
+<script>
+let page = {{.}};
+
+function reqJSON(method, urlStr, loadEnd, okCallback) {
+	let req = new XMLHttpRequest();
+	req.addEventListener("loadend", function(ev){
+		loadEnd(ev);
+	});
+	req.addEventListener("error", function(ev){
+		document.querySelector("#info").textContent = "http error";
+	});
+	req.addEventListener("load", function(ev){
+		let resp = JSON.parse(ev.target.responseText);
+		if (resp.Error) {
+			document.querySelector("#info").textContent = resp.Error.Msg;
+			return;
+		}
+		okCallback(resp);
+	});
+	req.open(method, urlStr);
+	req.send();
+}
+
+</script>
+</body>
+</html>
