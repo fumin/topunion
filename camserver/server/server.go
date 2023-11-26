@@ -30,6 +30,9 @@ func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 
 	// Camera ID.
 	cam := r.FormValue("c")
+	if cam == "" {
+		return nil, errors.Errorf("empty camera ID")
+	}
 	if err := util.IsAlphaNumeric(cam); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
