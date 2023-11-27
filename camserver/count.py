@@ -3,12 +3,40 @@
 
 import argparse
 import datetime
+import http
+from http import server as httpserver
+import json
 import inspect
 import json
 import logging
+import threading
 
-import torch
-import ultralytics
+# import torch
+# import ultralytics
+
+import util
+
+
+def Analyze(handler: httpserver.BaseHTTPRequestHandler):
+    forms, files = util.ReadMultipart(handler)
+    logging.info("req %s", forms["myname"])
+    logging.info("req %s", files["f"].filename)
+    logging.info("req %s", files["f"].file)
+    util.HTTPRespJ(handler, {"hello": "world"})
+
+
+class MyServerHandler(httpserver.BaseHTTPRequestHandler):
+
+    def do_POST(self):
+        if self.path == "/Quit":
+            threading.Thread(target=self.server.shutdown).start()
+        elif self.path == "/Analyze":
+            Analyze(self)
+        else:
+            util.HTTPRespJ(self, {"hello": "world"})
+
+    def log_message(self, format, *args):
+        return
 
 
 class StructuredMessage:
@@ -42,6 +70,11 @@ def main():
 def mainWithErr(args):
     cfg = json.loads(args.c)
     logging.info(_l("config", **cfg))
+
+    httpd = http.server.HTTPServer(("localhost", 8080), MyServerHandler)
+    port = httpd.server_address[1]
+    print('{"port":%d}' % port)
+    httpd.serve_forever()
 
 
 if __name__ == "__main__":
