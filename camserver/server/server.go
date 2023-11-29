@@ -21,6 +21,8 @@ import (
 
 const (
 	FormatDate = "20060102"
+
+	DBFilename = "db.sqlite"
 )
 
 func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}, error) {
@@ -143,7 +145,7 @@ func NewServer(config Config) (*Server, error) {
 		return nil, errors.Wrap(err, "")
 	}
 
-	dbPath := filepath.Join(s.C.Dir, "db.sqlite")
+	dbPath := filepath.Join(s.C.Dir, DBFilename)
 	dbV := url.Values{}
 	dbV.Set("_journal_mode", "WAL")
 	s.DB, err = sql.Open("sqlite3", "file:"+dbPath+"?"+dbV.Encode())
