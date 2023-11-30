@@ -1,13 +1,18 @@
 package camserver
 
 import (
+	"camserver/ffmpeg"
+	"camserver/util"
 	"context"
 	"database/sql"
 	_ "embed"
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/pkg/errors"
 )
@@ -15,6 +20,10 @@ import (
 const (
 	TableJob  = "job"
 	TableStat = "stat"
+
+	JobDir             = "job"
+	RawMPEGTSFilename  = "raw.ts"
+	CountVideoFilename = "count.ts"
 )
 
 func CreateTables(ctx context.Context, db *sql.DB) error {
@@ -76,6 +85,54 @@ type ProcessVideoInput struct {
 }
 
 func ProcessVideo(ctx context.Context, db *sql.DB, arg ProcessVideoInput) error {
-	log.Printf("process video %s", arg.Filepath)
+	runID := util.RandID()
+	dir := filepath.Join(filepath.Dir(arg.Filepath), JobDir, runID)
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		return errors.Wrap(err, "")
+	}
+
+	mpegts := filepath.Join(dir, RawMPEGTSFilename)
+	if err := toMPEGTS(ctx, mpegts, arg.Filepath); err != nil {
+		return errors.Wrap(err, "")
+	}
+	countPath := filepath.Join(dir, CountVideoFilename)
+	if err := countEgg(ctx, countPath, arg.Filepath); err != nil {
+		return errors.Wrap(err, "")
+	}
+
+	return nil
+}
+
+func toMPEGTS(ctx context.Context, dst, src string) error {
+	const fps = 30
+	teeMPEGTS := "[" + strings.Join([]string{
+		"f=mpegts",
+		"fifo_options=" + ffmpeg.TeeEscape([]string{
+			"queue_size=" + strconv.Itoa(60*fps),
+		}),
+	}, ":") + "]" + dst
+	arg := ffmpeg.Escape([]string{
+		"-i", src,
+		// No audio.
+		"-an",
+		// Variable frame rate, otherwise the HLS codec fails.
+		// "-vsync", "vfr", // for old versions of ffmpeg
+		"-fps_mode:v:0", "vfr",
+		// Use H264 encoding.
+		"-c:v", "libx264",
+		// H264 high profile level 4.2 for maximum support across devices.
+		"-profile:v", "high", "-level:v", "4.2",
+		// Tee multiple outputs.
+		"-f", "tee", "-map", "0:v", "-use_fifo", "1", teeMPEGTS,
+	})
+	cmd := exec.CommandContext(ctx, "ffmpeg", arg...)
+	b, err := cmd.CombinedOutput()
+	if err != nil {
+		return errors.Wrap(err, fmt.Sprintf("%s", b))
+	}
+	return nil
+}
+
+func countEgg(ctx context.Context, dst, src string) error {
 	return nil
 }

@@ -54,11 +54,22 @@ func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	}
 
 	// Save uploaded file.
-	dst := filepath.Join(s.VideoDir, t.Format("2006"), t.Format(FormatDate), cam, fh.Filename)
+	ext := filepath.Ext(fh.Filename)
+	noext := strings.TrimSuffix(fh.Filename, ext)
+	dst := filepath.Join(s.VideoDir, t.Format("2006"), t.Format(FormatDate), cam, noext, "raw"+ext)
 	if err := os.MkdirAll(filepath.Dir(dst), os.ModePerm); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
 	if err := util.WriteFile(dst, f); err != nil {
+		return nil, errors.Wrap(err, "")
+	}
+
+	// Send background job.
+	jobArg := ProcessVideoInput{Filepath: dst}
+	job := Job{Func: JobProcessVideo, Arg: jobArg}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := SendJob(ctx, s.DB, job); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
 

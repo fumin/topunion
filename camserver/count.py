@@ -371,20 +371,36 @@ class Yolo:
         return batch
 
 
-def Analyze(handler: httpserver.BaseHTTPRequestHandler):
+def Multipart(handler: httpserver.BaseHTT):
     forms, files = util.ReadMultipart(handler)
     logging.info("req %s", forms["myname"])
     logging.info("req %s", files["f"].filename)
     logging.info("req %s", files["f"].file)
-    util.HTTPRespJ(handler, {"hello": "world"})
+
+
+def Analyze(handler: httpserver.BaseHTTPRequestHandler, ai: AI):
+    parsed = urllib.parse.urlparse(self.path)
+    v = urllib.parse.parse_qs(parsed.query)
+    
+    passed, err = ai.run(v["dst"], v["src"])
+    if err:
+        util.HTTPRespJ(handler, {"Error": err})
+
+    util.HTTPRespJ(handler, {"passed": passed})
 
 
 class MyServerHandler(httpserver.BaseHTTPRequestHandler):
+    def __init__(self, cfg):
+        super().__init__()
+        self.ai = AI(cfg)
+
     def do_POST(self):
-        if self.path == "/Quit":
+        if self.path.startswith("/Quit"):
             threading.Thread(target=self.server.shutdown).start()
-        elif self.path == "/Analyze":
-            Analyze(self)
+        elif self.path.startswith("/Analyze"):
+            Analyze(self, self.ai)
+        elif self.path.startswith("/Multipart"):
+            Multipart(self)
         else:
             util.HTTPRespJ(self, {"hello": "world"})
 
@@ -424,10 +440,10 @@ def mainWithErr(args):
     cfg = json.loads(args.c)
     logging.info(_l("config", **cfg))
 
-    ai = AI(cfg)
-    passed, ok = ai.run("out.mp4", "testing/shilin20230826_short.mp4")
-    logging.info("ai.run %d %s", passed, ok)
-    return None
+    # ai = AI(cfg)
+    # passed, ok = ai.run("out.mp4", "testing/shilin20230826_short.mp4")
+    # logging.info("ai.run %d %s", passed, ok)
+    # return None
 
     httpd = http.server.HTTPServer(("localhost", 8080), MyServerHandler)
     port = httpd.server_address[1]

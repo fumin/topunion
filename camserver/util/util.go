@@ -48,3 +48,13 @@ func WriteFile(dstPath string, src io.Reader) error {
 	}
 	return err
 }
+
+func CopyFile(dstPath, srcPath string) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	defer src.Close()
+	return WriteFile(dstPath, src)
+
+}
