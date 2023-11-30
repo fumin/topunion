@@ -2,10 +2,26 @@ package util
 
 import (
 	"io"
+	"math/rand"
 	"os"
 
 	"github.com/pkg/errors"
 )
+
+func RandID() string {
+	const alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	// Ensure first letter is A to z without numbers.
+	s := string(alpha[rand.Intn(len(alpha))])
+	// For an alphanumeric alphabet, 8 letters roughly equals 512 bits, which is very sufficient to prevent birthday attacks.
+	const n = 7
+	for i := 0; i < n; i++ {
+		r := rand.Intn(len(alphabet))
+		c := alphabet[r]
+		s += string(c)
+	}
+	return s
+}
 
 func IsAlphaNumeric(s string) error {
 	for i := 0; i < len(s); i++ {
