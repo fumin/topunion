@@ -97,9 +97,6 @@ func (s *Server) dispatchJob(id string, jobB []byte) (jobRun, error) {
 func (s *Server) doJob() error {
 	jr, queueEmpty, err := s.receiveJob()
 	if err != nil {
-		if ujErr, ok := errors.Cause(err).(unknownJobError); ok {
-			deleteJob(s.DB, ujErr.id)
-		}
 		return errors.Wrap(err, "")
 	}
 	if queueEmpty {

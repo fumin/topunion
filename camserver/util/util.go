@@ -8,6 +8,15 @@ import (
 	"github.com/pkg/errors"
 )
 
+const (
+	FormatDate = "20060102"
+        FormatDatetime = "20060102_150405"
+
+	StdoutFilename     = "stdout.txt"
+        StderrFilename     = "stderr.txt"
+	StatusFilename = "status.txt"
+)
+
 func RandID() string {
 	const alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 	const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"

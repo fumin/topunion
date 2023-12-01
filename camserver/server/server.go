@@ -20,8 +20,6 @@ import (
 )
 
 const (
-	FormatDate = "20060102"
-
 	DBFilename = "db.sqlite"
 )
 
@@ -56,7 +54,7 @@ func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	// Save uploaded file.
 	ext := filepath.Ext(fh.Filename)
 	noext := strings.TrimSuffix(fh.Filename, ext)
-	dst := filepath.Join(s.VideoDir, t.Format("2006"), t.Format(FormatDate), cam, noext, "raw"+ext)
+	dst := filepath.Join(s.VideoDir, t.Format("2006"), t.Format(camserver.FormatDate), cam, noext, "raw"+ext)
 	if err := os.MkdirAll(filepath.Dir(dst), os.ModePerm); err != nil {
 		return nil, errors.Wrap(err, "")
 	}

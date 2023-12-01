@@ -1,5 +1,5 @@
 # Example usage:
-# python count.py -c='{"Height": 720, "Width": 1280, "Device": "cuda:0", "Mask": {"Enable": true, "Crop": {"X": 60, "Y": 0, "W": 1140}, "Mask": {"Slope": 10, "Y": 320, "H": 140}}, "Yolo": {"Weights": "yolo_best.pt", "Size": 640}}'
+# python count.py -c='{"Height": 480, "Width": 640, "Device": "cuda:0", "Mask": {"Enable": true, "Crop": {"X": 0, "Y": 0, "W": 999999}, "Mask": {"Slope": 5, "Y": 160, "H": 70}}, "Yolo": {"Weights": "yolo_best.pt", "Size": 640}}'
 
 import argparse
 import datetime
@@ -9,7 +9,9 @@ import json
 import inspect
 import json
 import logging
+import urllib
 import threading
+import traceback
 
 import av
 import cv2
@@ -61,14 +63,14 @@ class Instances:
         return color
 
 
-class AIOutput:
+class AIFrameOutput:
     def __init__(self, masked: npt.NDArray[np.uint8], tracked: Instances):
         self.masked = masked
         self.tracked = tracked
 
 
 class Frame:
-    def __init__(self, time_base: float, pts: float, dts: float, aiout: AIOutput):
+    def __init__(self, time_base: float, pts: float, dts: float, aiout: AIFrameOutput):
         self.time_base = time_base
         self.pts = pts
         self.dts = dts
@@ -116,6 +118,11 @@ class Video:
            self.pIdx += 1
 
 
+class AIOutput:
+    def __init__(self):
+        self.passed = -1
+
+
 class AI:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -129,7 +136,7 @@ class AI:
 
         self.tracker = Tracker()
 
-    def run(self, dst: str, src: str):
+    def run(self, dst: str, src: str) -> (AIOutput, str):
         self.tracker.reset()
 
         # Read video.
@@ -154,7 +161,7 @@ class AI:
 
         frame0, ok = video.seek(-1)
         if not ok:
-            return -1, f"no frames {inspect.getframeinfo(inspect.currentframe())}"
+            return AIOutput(), f"no frames {inspect.getframeinfo(inspect.currentframe())}"
 
         # Write video.
         wMux = av.open(dst, mode="w", format="mpegts")
@@ -188,8 +195,9 @@ class AI:
 
         wMux.close()
 
-        passed = self.tracker.passed()
-        return passed, ""
+        out = AIOutput()
+        out.passed = self.tracker.passed()
+        return out, ""
 
     def _analyzeImg(self, im):
         img = torch.from_numpy(im).to(self.cfg["Device"])
@@ -198,7 +206,7 @@ class AI:
 
         yoloOut = self.yolo.run(masked)
         tracked = self.tracker.run(yoloOut[0])
-        aiout = AIOutput(masked[0], tracked)
+        aiout = AIFrameOutput(masked[0], tracked)
         return aiout
 
 
@@ -345,7 +353,10 @@ class Yolo:
             chw = fn.pad(chw)
             chws.append(chw)
         bchw = torch.stack(chws, dim=0)
-        results = self.model(bchw, half=True, verbose=False)
+        half = False
+        if bchw.device.type.startswith("cuda"):
+            half = True
+        results = self.model(bchw, half=half, verbose=False)
 
         batch = []
         for i, result in enumerate(results):
@@ -371,7 +382,7 @@ class Yolo:
         return batch
 
 
-def Multipart(handler: httpserver.BaseHTT):
+def Multipart(handler: httpserver.BaseHTTPRequestHandler):
     forms, files = util.ReadMultipart(handler)
     logging.info("req %s", forms["myname"])
     logging.info("req %s", files["f"].filename)
@@ -379,26 +390,28 @@ def Multipart(handler: httpserver.BaseHTT):
 
 
 def Analyze(handler: httpserver.BaseHTTPRequestHandler, ai: AI):
-    parsed = urllib.parse.urlparse(self.path)
+    parsed = urllib.parse.urlparse(handler.path)
     v = urllib.parse.parse_qs(parsed.query)
-    
-    passed, err = ai.run(v["dst"], v["src"])
-    if err:
-        util.HTTPRespJ(handler, {"Error": err})
+    dst = v.get("dst", [""])[0]
+    src = v.get("src", [""])[0]
 
-    util.HTTPRespJ(handler, {"passed": passed})
+    try:
+        aiout, err = ai.run(dst, src)
+    except Exception as e:
+        aiout, err = AIOutput(), traceback.format_exc()
+    if err:
+        util.HTTPRespJ(handler, {"Error": ("%s %s" % (v, err))})
+        return
+
+    util.HTTPRespJ(handler, vars(aiout))
 
 
 class MyServerHandler(httpserver.BaseHTTPRequestHandler):
-    def __init__(self, cfg):
-        super().__init__()
-        self.ai = AI(cfg)
-
     def do_POST(self):
         if self.path.startswith("/Quit"):
             threading.Thread(target=self.server.shutdown).start()
         elif self.path.startswith("/Analyze"):
-            Analyze(self, self.ai)
+            Analyze(self, self.server.ai)
         elif self.path.startswith("/Multipart"):
             Multipart(self)
         else:
@@ -406,6 +419,12 @@ class MyServerHandler(httpserver.BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         return
+
+
+class MyServer(httpserver.ThreadingHTTPServer):
+    def __init__(self, server_address, RequestHandlerClass, cfg):
+        super().__init__(server_address, RequestHandlerClass)
+        self.ai = AI(cfg)
 
 
 class StructuredMessage:
@@ -440,14 +459,10 @@ def mainWithErr(args):
     cfg = json.loads(args.c)
     logging.info(_l("config", **cfg))
 
-    # ai = AI(cfg)
-    # passed, ok = ai.run("out.mp4", "testing/shilin20230826_short.mp4")
-    # logging.info("ai.run %d %s", passed, ok)
-    # return None
-
-    httpd = http.server.HTTPServer(("localhost", 8080), MyServerHandler)
+    httpd = MyServer(("localhost", 0), MyServerHandler, cfg)
     port = httpd.server_address[1]
-    print('{"port":%d}' % port)
+    host = "http://localhost:%d" % port
+    logging.info(_l("host", Host=host))
     httpd.serve_forever()
     return None
 
