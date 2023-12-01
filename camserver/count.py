@@ -120,7 +120,7 @@ class Video:
 
 class AIOutput:
     def __init__(self):
-        self.passed = -1
+        self.Passed = -1
 
 
 class AI:
@@ -196,7 +196,7 @@ class AI:
         wMux.close()
 
         out = AIOutput()
-        out.passed = self.tracker.passed()
+        out.Passed = self.tracker.passed()
         return out, ""
 
     def _analyzeImg(self, im):
@@ -400,10 +400,10 @@ def Analyze(handler: httpserver.BaseHTTPRequestHandler, ai: AI):
     except Exception as e:
         aiout, err = AIOutput(), traceback.format_exc()
     if err:
-        util.HTTPRespJ(handler, {"Error": ("%s %s" % (v, err))})
+        util.HTTPRespJ(handler, 400, {"Error": ("%s %s" % (v, err))})
         return
 
-    util.HTTPRespJ(handler, vars(aiout))
+    util.HTTPRespJ(handler, 200, vars(aiout))
 
 
 class MyServerHandler(httpserver.BaseHTTPRequestHandler):
@@ -415,7 +415,7 @@ class MyServerHandler(httpserver.BaseHTTPRequestHandler):
         elif self.path.startswith("/Multipart"):
             Multipart(self)
         else:
-            util.HTTPRespJ(self, {"hello": "world"})
+            util.HTTPRespJ(self, 200, {"hello": "world"})
 
     def log_message(self, format, *args):
         return

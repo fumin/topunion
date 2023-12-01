@@ -52,9 +52,9 @@ def ReadMultipart(handler: httpserver.BaseHTTPRequestHandler):
     return forms, files
         
 
-def HTTPRespJ(handler: httpserver.BaseHTTPRequestHandler, resp: Any):
+def HTTPRespJ(handler: httpserver.BaseHTTPRequestHandler, statusCode: int, resp: Any):
     b = json.dumps(resp)
-    handler.send_response(200)
+    handler.send_response(statusCode)
     handler.send_header('Content-Type', 'text/json')
     handler.end_headers()
     handler.wfile.write(b.encode("utf-8"))

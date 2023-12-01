@@ -18,10 +18,10 @@ import (
 func TestProcessVideo(t *testing.T) {
 	t.Parallel()
 	env := newEnvironment(t)
-	defer env.Close()
+	defer env.close()
 
 	testVid := filepath.Join(env.dir, "test.mp4")
-	if err := util.CopyFile(testVid, filepath.Join("testing", "shilin20230826_short.mp4")); err != nil {
+	if err := util.CopyFile(testVid, filepath.Join("testing", "shilin20230826_sd.mp4")); err != nil {
 		t.Fatalf("%+v", err)
 	}
 
@@ -41,7 +41,7 @@ func TestProcessVideo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	if probe.Format.Duration != 13.766667 {
+	if probe.Format.Duration != 17.1 {
 		t.Fatalf("%+v", probe)
 	}
 }
@@ -59,8 +59,9 @@ func lastDirEntry(dir string) (string, error) {
 }
 
 type environment struct {
-	dir string
-	db  *sql.DB
+	dir     string
+	db      *sql.DB
+	scripts Scripts
 }
 
 func newEnvironment(t *testing.T) *environment {
@@ -78,10 +79,15 @@ func newEnvironment(t *testing.T) *environment {
 		t.Fatalf("%+v", err)
 	}
 
+	env.scripts, err = NewScripts(dir)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
 	return env
 }
 
-func (env *environment) Close() {
+func (env *environment) close() {
 	env.db.Close()
 	os.RemoveAll(env.dir)
 }

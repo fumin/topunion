@@ -1,5 +1,45 @@
 package camserver
 
+import (
+	"camserver/cuda"
+	"path/filepath"
+	"testing"
+)
+
+func TestCounter(t *testing.T) {
+	t.Parallel()
+	env := newEnvironment(t)
+	defer env.close()
+
+	device := "cpu"
+	if cuda.IsAvailable() {
+		device = "cuda:0"
+	}
+	cfg := CountConfig{Height: 480, Width: 640, Device: device}
+	cfg.Mask.Enable = true
+	cfg.Mask.Crop.W = 999999
+	cfg.Mask.Mask.Slope = 5
+	cfg.Mask.Mask.Y = 160
+	cfg.Mask.Mask.H = 70
+	cfg.Yolo.Weights = "yolo_best.pt"
+	cfg.Yolo.Size = 640
+	counter, err := NewCounter(env.dir, env.scripts.Count, cfg)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	defer counter.Close()
+
+	dst := filepath.Join(env.dir, "dst.ts")
+	src := filepath.Join("testing", "shilin20230826_sd.mp4")
+	out, err := counter.Analyze(dst, src)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	if out.Passed != 10 {
+		t.Fatalf("%#v", out)
+	}
+}
+
 // func TestCount(t *testing.T) {
 // 	t.Parallel()
 // 	dir, err := os.MkdirTemp("", "")

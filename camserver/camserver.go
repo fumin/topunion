@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	_ "embed"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,13 +21,8 @@ const (
 	TableStat = "stat"
 
 	JobDir             = "job"
-	ProcessDir         = "proc"
 	RawMPEGTSFilename  = "raw.ts"
 	CountVideoFilename = "count.ts"
-)
-
-var (
-	CounterDir = filepath.Join(ProcessDir, "counter")
 )
 
 func CreateTables(ctx context.Context, db *sql.DB) error {

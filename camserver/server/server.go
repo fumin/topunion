@@ -1,8 +1,7 @@
 package server
 
 import (
-	"camserver"
-	"camserver/util"
+	"context"
 	"database/sql"
 	"embed"
 	"encoding/json"
@@ -12,11 +11,15 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/template"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/pkg/errors"
+
+	"camserver"
+	"camserver/util"
 )
 
 const (
@@ -54,7 +57,7 @@ func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	// Save uploaded file.
 	ext := filepath.Ext(fh.Filename)
 	noext := strings.TrimSuffix(fh.Filename, ext)
-	dst := filepath.Join(s.VideoDir, t.Format("2006"), t.Format(camserver.FormatDate), cam, noext, "raw"+ext)
+	dst := filepath.Join(s.VideoDir, t.Format("2006"), t.Format(util.FormatDate), cam, noext, "raw"+ext)
 	if err := os.MkdirAll(filepath.Dir(dst), os.ModePerm); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
@@ -63,7 +66,7 @@ func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	}
 
 	// Send background job.
-	jobArg := ProcessVideoInput{Filepath: dst}
+	jobArg := camserver.ProcessVideoInput{Filepath: dst}
 	job := Job{Func: JobProcessVideo, Arg: jobArg}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -117,11 +120,23 @@ func handleJSON(s *Server, httpPath string, fn func(*Server, http.ResponseWriter
 	s.ServeMux.HandleFunc(httpPath, handler)
 }
 
+type CameraConfig struct {
+	ID    string
+	Count camserver.CountConfig
+}
+
+type Camera struct {
+	Config  CameraConfig
+	Counter *camserver.Counter
+}
+
 type Config struct {
 	// Directory to store data.
 	Dir string
 	// Address to listen to.
 	Addr string
+
+	Camera []CameraConfig
 }
 
 type Server struct {
@@ -134,8 +149,11 @@ type Server struct {
 	ScriptDir string
 	Scripts   camserver.Scripts
 
-	DB       *sql.DB
-	VideoDir string
+	BackgroundProcessDir string
+	DB                   *sql.DB
+	VideoDir             string
+
+	Camera map[string]Camera
 }
 
 //go:embed static
@@ -154,6 +172,11 @@ func NewServer(config Config) (*Server, error) {
 		return nil, errors.Wrap(err, "")
 	}
 
+	s.BackgroundProcessDir = filepath.Join(s.C.Dir, "proc")
+	if err := os.MkdirAll(s.BackgroundProcessDir, os.ModePerm); err != nil {
+		return nil, errors.Wrap(err, "")
+	}
+
 	dbPath := filepath.Join(s.C.Dir, DBFilename)
 	dbV := url.Values{}
 	dbV.Set("_journal_mode", "WAL")
@@ -165,6 +188,24 @@ func NewServer(config Config) (*Server, error) {
 	s.VideoDir = filepath.Join(s.C.Dir, "video")
 	if err := os.MkdirAll(s.VideoDir, os.ModePerm); err != nil {
 		return nil, errors.Wrap(err, "")
+	}
+
+	s.Camera = make(map[string]Camera)
+	for _, camCfg := range s.C.Camera {
+		if err := util.IsAlphaNumeric(camCfg.ID); err != nil {
+			return nil, errors.Wrap(err, fmt.Sprintf("\"%s\" %#v", camCfg.ID, camCfg))
+		}
+		if _, ok := s.Camera[camCfg.ID]; ok {
+			return nil, errors.Errorf("duplicate camera \"%s\" %#v", camCfg.ID, camCfg)
+		}
+		cam := Camera{Config: camCfg}
+
+		countDir := filepath.Join(s.BackgroundProcessDir, camCfg.ID, "count")
+		cam.Counter, err = camserver.NewCounter(countDir, s.Scripts.Count, camCfg.Count)
+		if err != nil {
+			return nil, errors.Wrap(err, "")
+		}
+		s.Camera[cam.Config.ID] = cam
 	}
 
 	handleJSON(s, "/UploadVideo", UploadVideo)

@@ -9,11 +9,11 @@ import (
 )
 
 const (
-	FormatDate = "20060102"
-        FormatDatetime = "20060102_150405"
+	FormatDate     = "20060102"
+	FormatDatetime = "20060102_150405"
 
-	StdoutFilename     = "stdout.txt"
-        StderrFilename     = "stderr.txt"
+	StdoutFilename = "stdout.txt"
+	StderrFilename = "stderr.txt"
 	StatusFilename = "status.txt"
 )
 

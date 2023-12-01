@@ -1,6 +1,7 @@
 package server
 
 import (
+	"camserver/util"
 	"fmt"
 	"io/fs"
 	"os"
@@ -12,7 +13,7 @@ import (
 
 func DeleteOldVideos(root string, dur time.Duration) error {
 	cutoff := time.Now().Add(-dur)
-	cutoffDayStr := cutoff.Format(FormatDate)
+	cutoffDayStr := cutoff.Format(util.FormatDate)
 
 	olds := make([]string, 0)
 	years, err := os.ReadDir(root)

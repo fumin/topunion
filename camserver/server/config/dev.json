@@ -1,4 +1,29 @@
 {
 	"Dir": "devData",
-	"Addr": ":8080" 
+	"Addr": ":8080",
+	"Camera": [
+		{
+			"ID": "camera0",
+			"Count": {
+				"Device": "cuda:0",
+				"Mask": {
+					"Enable": true,
+					"Crop": {
+						"X": 0,
+						"Y": 0,
+						"W": 999999
+					},
+					"Mask": {
+						"Slope": 0,
+						"Y": 0,
+						"H": 480
+					}
+				},
+				"Yolo": {
+					"Weights": "yolo_best.pt",
+					"Size": 640
+				}
+			}
+		}
+	]
 }
