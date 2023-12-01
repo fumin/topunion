@@ -12,13 +12,15 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pkg/errors"
 )
 
 const (
-	TableJob  = "job"
-	TableStat = "stat"
+	TableJob     = "job"
+	TableDeadJob = "deadjob"
+	TableStat    = "stat"
 
 	JobDir             = "job"
 	RawMPEGTSFilename  = "raw.ts"
@@ -29,8 +31,16 @@ func CreateTables(ctx context.Context, db *sql.DB) error {
 	sqlStrs := []string{
 		`CREATE TABLE ` + TableJob + ` (
 			id TEXT,
+			createAt INTEGER,
 			job BLOB,
 			lease INTEGER,
+			retries INTEGER,
+			PRIMARY KEY (id)
+		) STRICT`,
+		`CREATE TABLE ` + TableDeadJob + ` (
+			id TEXT,
+			createAt INTEGER,
+			job BLOB,
 			PRIMARY KEY (id)
 		) STRICT`,
 		`CREATE TABLE ` + TableStat + ` (
@@ -80,10 +90,12 @@ func NewScripts(dir string) (Scripts, error) {
 }
 
 type ProcessVideoInput struct {
+	Camera   string
 	Filepath string
+	Time     time.Time
 }
 
-func ProcessVideo(ctx context.Context, db *sql.DB, arg ProcessVideoInput) error {
+func ProcessVideo(ctx context.Context, db *sql.DB, counter *Counter, arg ProcessVideoInput) error {
 	runID := util.RandID()
 	dir := filepath.Join(filepath.Dir(arg.Filepath), JobDir, runID)
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
@@ -94,8 +106,14 @@ func ProcessVideo(ctx context.Context, db *sql.DB, arg ProcessVideoInput) error 
 	if err := toMPEGTS(ctx, mpegts, arg.Filepath); err != nil {
 		return errors.Wrap(err, "")
 	}
+
 	countPath := filepath.Join(dir, CountVideoFilename)
-	if err := countEgg(ctx, countPath, arg.Filepath); err != nil {
+	countOut, err := counter.Analyze(ctx, countPath, arg.Filepath)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+
+	if err := incrStat(ctx, db, arg.Time, arg.Camera, countOut.Passed); err != nil {
 		return errors.Wrap(err, "")
 	}
 
@@ -132,6 +150,40 @@ func toMPEGTS(ctx context.Context, dst, src string) error {
 	return nil
 }
 
-func countEgg(ctx context.Context, dst, src string) error {
+func incrStat(ctx context.Context, db *sql.DB, t time.Time, camera string, diff int) error {
+	date := t.In(time.UTC).Format(util.FormatDate)
+
+	tx, err := db.Begin()
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	defer tx.Rollback()
+
+	selectStr := `SELECT n FROM ` + TableStat + ` WHERE date=? AND camera=?`
+	var n int
+	if err := tx.QueryRowContext(ctx, selectStr, date, camera).Scan(&n); err != nil {
+		if err != sql.ErrNoRows {
+			return errors.Wrap(err, "")
+		}
+	}
+
+	insertStr := `INSERT INTO ` + TableStat + ` (date, camera, n) VALUES (?, ?, ?)`
+	if _, err := tx.ExecContext(ctx, insertStr, date, camera, n+diff); err != nil {
+		return errors.Wrap(err, "")
+	}
+
+	if err := tx.Commit(); err != nil {
+		return errors.Wrap(err, "")
+	}
 	return nil
+}
+
+func readStat(ctx context.Context, db *sql.DB, t time.Time, camera string) (int, error) {
+	date := t.In(time.UTC).Format(util.FormatDate)
+	selectStr := `SELECT n FROM ` + TableStat + ` WHERE date=? AND camera=?`
+	var n int
+	if err := db.QueryRowContext(ctx, selectStr, date, camera).Scan(&n); err != nil {
+		return -1, errors.Wrap(err, "")
+	}
+	return n, nil
 }

@@ -36,8 +36,8 @@ func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	if cam == "" {
 		return nil, errors.Errorf("empty camera ID")
 	}
-	if err := util.IsAlphaNumeric(cam); err != nil {
-		return nil, errors.Wrap(err, "")
+	if _, ok := s.Camera[cam]; !ok {
+		return nil, errors.Errorf("unknown camera")
 	}
 
 	// Uploaded file.
@@ -66,7 +66,11 @@ func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	}
 
 	// Send background job.
-	jobArg := camserver.ProcessVideoInput{Filepath: dst}
+	jobArg := camserver.ProcessVideoInput{
+		Camera:   cam,
+		Filepath: dst,
+		Time:     t,
+	}
 	job := Job{Func: JobProcessVideo, Arg: jobArg}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

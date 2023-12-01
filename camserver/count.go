@@ -89,12 +89,16 @@ type CountOutput struct {
 	Passed int
 }
 
-func (c *Counter) Analyze(dst, src string) (CountOutput, error) {
+func (c *Counter) Analyze(ctx context.Context, dst, src string) (CountOutput, error) {
 	v := url.Values{}
 	v.Set("dst", dst)
 	v.Set("src", src)
 	urlStr := c.getHost() + "/Analyze?" + v.Encode()
-	resp, err := http.Post(urlStr, "application/x-www-form-urlencoded", nil)
+	req, err := http.NewRequestWithContext(ctx, "POST", urlStr, nil)
+	if err != nil {
+		return CountOutput{}, errors.Wrap(err, "")
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return CountOutput{}, errors.Wrap(err, "")
 	}

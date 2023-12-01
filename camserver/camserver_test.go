@@ -1,6 +1,7 @@
 package camserver
 
 import (
+	"camserver/cuda"
 	"camserver/ffmpeg"
 	"camserver/util"
 	"context"
@@ -25,13 +26,25 @@ func TestProcessVideo(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 
-	arg := ProcessVideoInput{Filepath: testVid}
+	cfg := shilinSDConfig()
+	counter, err := NewCounter(env.dir, env.scripts.Count, cfg)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	defer counter.Close()
+
+	arg := ProcessVideoInput{
+		Camera:   "testcam",
+		Filepath: testVid,
+		Time:     time.Date(2023, time.December, 2, 1, 43, 22, 0, util.TaipeiTZ),
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	if err := ProcessVideo(ctx, env.db, arg); err != nil {
+	if err := ProcessVideo(ctx, env.db, counter, arg); err != nil {
 		t.Fatalf("%+v", err)
 	}
 
+	// Check mpegts output.
 	runDir, err := lastDirEntry(filepath.Join(env.dir, JobDir))
 	if err != nil {
 		t.Fatalf("%+v", err)
@@ -43,6 +56,16 @@ func TestProcessVideo(t *testing.T) {
 	}
 	if probe.Format.Duration != 17.1 {
 		t.Fatalf("%+v", probe)
+	}
+
+	// Check count.
+	qt := time.Date(2023, time.December, 1, 0, 0, 0, 0, time.UTC)
+	n, err := readStat(ctx, env.db, qt, arg.Camera)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	if n != 10 {
+		t.Fatalf("%d", n)
 	}
 }
 
@@ -56,6 +79,22 @@ func lastDirEntry(dir string) (string, error) {
 	}
 	last := entries[len(entries)-1]
 	return filepath.Join(dir, last.Name()), nil
+}
+
+func shilinSDConfig() CountConfig {
+	device := "cpu"
+	if cuda.IsAvailable() {
+		device = "cuda:0"
+	}
+	cfg := CountConfig{Height: 480, Width: 640, Device: device}
+	cfg.Mask.Enable = true
+	cfg.Mask.Crop.W = 999999
+	cfg.Mask.Mask.Slope = 5
+	cfg.Mask.Mask.Y = 160
+	cfg.Mask.Mask.H = 70
+	cfg.Yolo.Weights = "yolo_best.pt"
+	cfg.Yolo.Size = 640
+	return cfg
 }
 
 type environment struct {
@@ -76,6 +115,11 @@ func newEnvironment(t *testing.T) *environment {
 	dbV.Set("_journal_mode", "WAL")
 	env.db, err = sql.Open("sqlite3", "file:"+dbPath+"?"+dbV.Encode())
 	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := CreateTables(ctx, env.db); err != nil {
 		t.Fatalf("%+v", err)
 	}
 

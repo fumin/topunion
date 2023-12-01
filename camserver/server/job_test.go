@@ -3,6 +3,7 @@ package server
 import (
 	"camserver"
 	"context"
+	"encoding/json"
 	"os"
 	"testing"
 	"time"
@@ -27,7 +28,7 @@ func TestJobSuccess(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 
-	if err := s.doJob(); err != nil {
+	if _, err := s.doJob(); err != nil {
 		t.Fatalf("%+v", err)
 	}
 	if !jobHasRun {
@@ -64,17 +65,17 @@ func TestJobTimeout(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 
-	if err := s.doJob(); errors.Cause(err) != context.DeadlineExceeded {
+	if _, err := s.doJob(); errors.Cause(err) != context.DeadlineExceeded {
 		t.Fatalf("%+v", err)
 	}
 
-	// Check that job is ready to be retried again.
-	var queued int
-	if err := s.DB.QueryRowContext(ctx, `SELECT count(1) FROM `+camserver.TableJob+` WHERE lease == 0`).Scan(&queued); err != nil {
+	// Check that retries count is incremented.
+	var retries int
+	if err := s.DB.QueryRowContext(ctx, `SELECT retries FROM `+camserver.TableJob+` WHERE lease == 0`).Scan(&retries); err != nil {
 		t.Fatalf("%+v", err)
 	}
-	if queued != 1 {
-		t.Fatalf("%d", queued)
+	if retries != 1 {
+		t.Fatalf("%d", retries)
 	}
 }
 
@@ -94,7 +95,7 @@ func TestJobError(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 
-	if err := s.doJob(); errors.Cause(err) != jobErr {
+	if _, err := s.doJob(); errors.Cause(err) != jobErr {
 		t.Fatalf("%+v", err)
 	}
 
@@ -105,6 +106,46 @@ func TestJobError(t *testing.T) {
 	}
 	if queued != 1 {
 		t.Fatalf("%d", queued)
+	}
+
+	// Retry a few more times.
+	for i := 0; i < 3; i++ {
+		if _, err := s.doJob(); errors.Cause(err) != jobErr {
+			t.Fatalf("%+v", err)
+		}
+	}
+
+	// Check that the dead letter queue is empty before the last try.
+	var dead int
+	if err := s.DB.QueryRowContext(ctx, `SELECT count(1) FROM `+camserver.TableDeadJob).Scan(&dead); err != nil {
+		t.Fatalf("%+v", err)
+	}
+	if dead != 0 {
+		t.Fatalf("%d", dead)
+	}
+
+	// Last try.
+	if _, err := s.doJob(); err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	// After the last try, job should be moved to the dead letter queue.
+	if err := s.DB.QueryRowContext(ctx, `SELECT count(1) FROM `+camserver.TableJob+` WHERE lease == 0`).Scan(&queued); err != nil {
+		t.Fatalf("%+v", err)
+	}
+	if queued != 0 {
+		t.Fatalf("%d", queued)
+	}
+	var jobB []byte
+	if err := s.DB.QueryRowContext(ctx, `SELECT job FROM `+camserver.TableDeadJob+` LIMIT 1`).Scan(&jobB); err != nil {
+		t.Fatalf("%+v", err)
+	}
+	var deadJob Job
+	if err := json.Unmarshal(jobB, &deadJob); err != nil {
+		t.Fatalf("%+v", err)
+	}
+	if deadJob.Func != jobForTesting {
+		t.Fatalf("%s", jobB)
 	}
 }
 

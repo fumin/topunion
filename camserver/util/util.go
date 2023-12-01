@@ -4,6 +4,7 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"time"
 
 	"github.com/pkg/errors"
 )
@@ -15,6 +16,10 @@ const (
 	StdoutFilename = "stdout.txt"
 	StderrFilename = "stderr.txt"
 	StatusFilename = "status.txt"
+)
+
+var (
+	TaipeiTZ = time.FixedZone("Asia/Taipei", int((8 * time.Hour).Seconds()))
 )
 
 func RandID() string {
