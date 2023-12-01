@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"runtime"
 	"time"
 
@@ -58,7 +59,9 @@ func (s *Server) DoJobForever() {
 					log.Printf("%+v", err)
 				}
 				if emptyQueue {
-					<-time.After(10 * time.Second)
+					// Apply randomness to reduce database contention
+					secs := 5 + rand.Intn(10)
+					<-time.After(time.Duration(secs) * time.Second)
 				}
 			}
 		}()

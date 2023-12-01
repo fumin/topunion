@@ -135,7 +135,7 @@ func (c *Counter) run(ctx context.Context, script, cfgStr string) error {
 		if err == nil {
 			break
 		}
-		if i > 10 {
+		if i > 60 {
 			return errors.Errorf("no host")
 		}
 		<-time.After(1 * time.Second)

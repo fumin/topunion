@@ -1,11 +1,14 @@
 {
+	"Name": "dev",
 	"Dir": "devData",
 	"Addr": ":8080",
 	"Camera": [
 		{
 			"ID": "camera0",
+			"Height": 480,
+			"Width": 640,
 			"Count": {
-				"Device": "cuda:0",
+				"Device": "cpu",
 				"Mask": {
 					"Enable": true,
 					"Crop": {

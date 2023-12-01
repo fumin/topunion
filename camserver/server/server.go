@@ -125,8 +125,10 @@ func handleJSON(s *Server, httpPath string, fn func(*Server, http.ResponseWriter
 }
 
 type CameraConfig struct {
-	ID    string
-	Count camserver.CountConfig
+	ID     string
+	Height int
+	Width  int
+	Count  camserver.CountConfig
 }
 
 type Camera struct {
@@ -135,6 +137,7 @@ type Camera struct {
 }
 
 type Config struct {
+	Name string
 	// Directory to store data.
 	Dir string
 	// Address to listen to.
@@ -205,6 +208,8 @@ func NewServer(config Config) (*Server, error) {
 		cam := Camera{Config: camCfg}
 
 		countDir := filepath.Join(s.BackgroundProcessDir, camCfg.ID, "count")
+		camCfg.Count.Height = camCfg.Height
+		camCfg.Count.Width = camCfg.Width
 		cam.Counter, err = camserver.NewCounter(countDir, s.Scripts.Count, camCfg.Count)
 		if err != nil {
 			return nil, errors.Wrap(err, "")

@@ -21,7 +21,7 @@ func TestCounter(t *testing.T) {
 
 	dst := filepath.Join(env.dir, "dst.ts")
 	src := filepath.Join("testing", "shilin20230826_sd.mp4")
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	out, err := counter.Analyze(ctx, dst, src)
 	if err != nil {

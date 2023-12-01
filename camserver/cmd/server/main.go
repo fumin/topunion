@@ -1,6 +1,7 @@
 package main
 
 import (
+	"camserver/cuda"
 	"camserver/server"
 	"context"
 	"encoding/json"
@@ -27,6 +28,13 @@ func readConfig(fpath string) (server.Config, error) {
 	if err := json.Unmarshal(b, &config); err != nil {
 		return server.Config{}, errors.Wrap(err, "")
 	}
+
+	if config.Name == "dev" && cuda.IsAvailable() {
+		for i := range config.Camera {
+			config.Camera[i].Count.Device = "cuda:0"
+		}
+	}
+
 	return config, nil
 }
 
@@ -89,6 +97,7 @@ func mainWithErr() error {
 			log.Printf("HTTP server Shutdown: %+v", err)
 		}
 	}()
+	log.Printf("listening on %s", s.Server.Addr)
 	if err := s.Server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Printf("%+v", err)
 	}

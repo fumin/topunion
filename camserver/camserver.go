@@ -167,7 +167,7 @@ func incrStat(ctx context.Context, db *sql.DB, t time.Time, camera string, diff 
 		}
 	}
 
-	insertStr := `INSERT INTO ` + TableStat + ` (date, camera, n) VALUES (?, ?, ?)`
+	insertStr := `REPLACE INTO ` + TableStat + ` (date, camera, n) VALUES (?, ?, ?)`
 	if _, err := tx.ExecContext(ctx, insertStr, date, camera, n+diff); err != nil {
 		return errors.Wrap(err, "")
 	}

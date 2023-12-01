@@ -6,6 +6,7 @@ import (
 	"flag"
 	"log"
 	"net/url"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -30,6 +31,9 @@ func main() {
 }
 
 func mainWithErr() error {
+	if err := os.MkdirAll(*dir, os.ModePerm); err != nil {
+		return errors.Wrap(err, "")
+	}
 	dbPath := filepath.Join(*dir, server.DBFilename)
 	dbV := url.Values{}
 	dbV.Set("_journal_mode", "WAL")
