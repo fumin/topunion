@@ -45,6 +45,7 @@ func CreateTables(ctx context.Context, db *sql.DB) error {
 			id TEXT,
 			createAt INTEGER,
 			job BLOB,
+			err TEXT,
 			PRIMARY KEY (id)
 		) STRICT`,
 		`CREATE TABLE ` + TableStat + ` (

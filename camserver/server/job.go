@@ -56,7 +56,7 @@ func (s *Server) DoJobForever() {
 			milliSec := i*1000 + rand.Intn(2000)
 			<-time.After(time.Duration(milliSec) * time.Millisecond)
 			for {
-				emptyQueue, err := s.doJob()
+				emptyQueue, _, err := s.doJob()
 				if err != nil {
 					log.Printf("%+v", err)
 				}
@@ -91,27 +91,27 @@ type jobRun struct {
 	duration time.Duration
 }
 
-func (s *Server) dispatchJob(id string, createAt int64, jobB []byte) (jobRun, error) {
+func (s *Server) dispatchJob(jr *jobRun) error {
 	jb := struct {
 		Func JobFunc
 		Arg  json.RawMessage
 	}{}
-	if err := json.Unmarshal(jobB, &jb); err != nil {
-		return jobRun{}, errors.Wrap(err, "")
+	if err := json.Unmarshal(jr.b, &jb); err != nil {
+		return errors.Wrap(err, "")
 	}
+	jr.job.Func = jb.Func
 
-	jbRun := jobRun{id: id, createAt: time.Unix(createAt, 0), b: jobB, job: Job{Func: jb.Func}}
 	var err error
 	switch jb.Func {
 	case jobForTesting:
-		jbRun.duration = jobForTestingDuration
-		jbRun.fn = jobForTestingFunc
+		jr.duration = jobForTestingDuration
+		jr.fn = jobForTestingFunc
 	case JobProcessVideo:
 		var arg camserver.ProcessVideoInput
 		err = json.Unmarshal(jb.Arg, &arg)
-		jbRun.job.Arg = arg
-		jbRun.duration = 5 * time.Minute
-		jbRun.fn = func(ctx context.Context) error {
+		jr.job.Arg = arg
+		jr.duration = 5 * time.Minute
+		jr.fn = func(ctx context.Context) error {
 			cam, ok := s.Camera[arg.Camera]
 			if !ok {
 				return errors.Wrap(err, fmt.Sprintf("unknown camera \"%s\"", arg.Camera))
@@ -119,56 +119,46 @@ func (s *Server) dispatchJob(id string, createAt int64, jobB []byte) (jobRun, er
 			return camserver.ProcessVideo(ctx, s.DB, cam.Counter, arg)
 		}
 	default:
-		return jobRun{}, unknownJobError{fn: jb.Func, id: id, b: jobB}
+		return unknownJobError{fn: jb.Func, id: jr.id, b: jr.b}
 	}
 	if err != nil {
-		return jobRun{}, errors.Wrap(err, "")
+		return errors.Wrap(err, "")
 	}
-	return jbRun, nil
+	return nil
 }
 
-func (s *Server) doJob() (bool, error) {
+func (s *Server) doJob() (bool, error, error) {
 	jr, queueEmpty, err := s.receiveJob()
 	if err != nil {
-		return false, errors.Wrap(err, "")
+		return false, nil, errors.Wrap(err, "")
 	}
 	if queueEmpty {
-		return true, nil
+		return true, nil, nil
 	}
 
+	// Run the job logic.
 	ctx, cancel := context.WithTimeout(context.Background(), jr.duration)
 	defer cancel()
-	if err := jr.fn(ctx); err != nil {
-		resetLease(s.DB, jr.id)
-		return false, errors.Wrap(err, fmt.Sprintf("%#v", jr))
+	jobErr := jr.fn(ctx)
+
+	// Update job status given the results of the job run.
+	switch {
+	case jobErr == nil:
+		err = deleteJob(s.DB, jr.id)
+	case jr.retries < 3:
+		err = resetLease(s.DB, jr.id)
+	default:
+		err = moveDeadJob(s.DB, jr, jobErr)
+	}
+	if err != nil {
+		msg := fmt.Sprintf("%s %v %d", jr.id, jobErr == nil, jr.retries)
+		return false, nil, errors.Wrap(err, msg)
 	}
 
-	if err := deleteJob(s.DB, jr.id); err != nil {
-		return false, errors.Wrap(err, "")
-	}
-	return false, nil
+	return false, jobErr, nil
 }
 
 func (s *Server) receiveJob() (jobRun, bool, error) {
-	for {
-		jr, emptyQueue, err := s.receiveJobOnce()
-		if err != nil {
-			return jobRun{}, false, errors.Wrap(err, "")
-		}
-		if emptyQueue {
-			return jobRun{}, true, nil
-		}
-		if jr.retries > 3 {
-			if err := moveDeadJob(s.DB, jr); err != nil {
-				return jobRun{}, false, errors.Wrap(err, "")
-			}
-			continue
-		}
-		return jr, false, nil
-	}
-}
-
-func (s *Server) receiveJobOnce() (jobRun, bool, error) {
 	tx, err := s.DB.Begin()
 	if err != nil {
 		return jobRun{}, false, errors.Wrap(err, "")
@@ -178,23 +168,19 @@ func (s *Server) receiveJobOnce() (jobRun, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	selectSQL := `SELECT id, createAt, job, retries FROM ` + camserver.TableJob + ` WHERE lease < ? LIMIT 1`
-	now := time.Now().Unix()
-	var id string
+	var jr jobRun
 	var createAt int64
-	var jobB []byte
-	var retries int
-	if err := tx.QueryRowContext(ctx, selectSQL, now).Scan(&id, &createAt, &jobB, &retries); err != nil {
+	if err := tx.QueryRowContext(ctx, selectSQL, time.Now().Unix()).Scan(&jr.id, &createAt, &jr.b, &jr.retries); err != nil {
 		if err == sql.ErrNoRows {
 			return jobRun{}, true, nil
 		}
 		return jobRun{}, false, errors.Wrap(err, "")
 	}
+	jr.createAt = time.Unix(createAt, 0)
 
-	jr, err := s.dispatchJob(id, createAt, jobB)
-	if err != nil {
-		return jobRun{}, false, errors.Wrap(err, fmt.Sprintf("\"%s\" \"%s\"", id, jobB))
+	if err := s.dispatchJob(&jr); err != nil {
+		return jobRun{}, false, errors.Wrap(err, fmt.Sprintf("\"%s\" \"%s\"", jr.id, jr.b))
 	}
-	jr.retries = retries
 
 	// Add some margin to ensure no two jobs are running at the same time.
 	const margin = time.Minute
@@ -202,7 +188,7 @@ func (s *Server) receiveJobOnce() (jobRun, bool, error) {
 	updateSQL := `UPDATE ` + camserver.TableJob + ` SET
 		lease=?, retries=retries+1
 		WHERE id=?`
-	if _, err := tx.ExecContext(ctx, updateSQL, lease, id); err != nil {
+	if _, err := tx.ExecContext(ctx, updateSQL, lease, jr.id); err != nil {
 		return jobRun{}, false, errors.Wrap(err, "")
 	}
 
@@ -212,11 +198,12 @@ func (s *Server) receiveJobOnce() (jobRun, bool, error) {
 	return jr, false, nil
 }
 
-func resetLease(db *sql.DB, id string) {
+func resetLease(db *sql.DB, id string) error {
 	updateSQL := `UPDATE ` + camserver.TableJob + ` SET lease=0 WHERE id=?`
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	db.ExecContext(ctx, updateSQL, id)
+	_, err := db.ExecContext(ctx, updateSQL, id)
+	return err
 }
 
 func deleteJob(db *sql.DB, id string) error {
@@ -227,7 +214,7 @@ func deleteJob(db *sql.DB, id string) error {
 	return err
 }
 
-func moveDeadJob(db *sql.DB, jr jobRun) error {
+func moveDeadJob(db *sql.DB, jr jobRun, jobErr error) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return errors.Wrap(err, "")
@@ -241,8 +228,9 @@ func moveDeadJob(db *sql.DB, jr jobRun) error {
 		return errors.Wrap(err, "")
 	}
 
-	insertSQL := `INSERT INTO ` + camserver.TableDeadJob + ` (id, createAt, job) VALUES (?, ?, ?)`
-	if _, err := db.ExecContext(ctx, insertSQL, jr.id, jr.createAt.Unix(), jr.b); err != nil {
+	jobErrStr := fmt.Sprintf("%+v", jobErr)
+	insertSQL := `INSERT INTO ` + camserver.TableDeadJob + ` (id, createAt, job, err) VALUES (?, ?, ?, ?)`
+	if _, err := db.ExecContext(ctx, insertSQL, jr.id, jr.createAt.Unix(), jr.b, jobErrStr); err != nil {
 		return errors.Wrap(err, "")
 	}
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,8 +29,8 @@ func TestJobSuccess(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 
-	if _, err := s.doJob(); err != nil {
-		t.Fatalf("%+v", err)
+	if _, jerr, err := s.doJob(); jerr != nil || err != nil {
+		t.Fatalf("%+v %+v", jerr, err)
 	}
 	if !jobHasRun {
 		t.Fatalf("job not run")
@@ -65,8 +66,12 @@ func TestJobTimeout(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 
-	if _, err := s.doJob(); errors.Cause(err) != context.DeadlineExceeded {
+	_, jerr, err := s.doJob()
+	if err != nil {
 		t.Fatalf("%+v", err)
+	}
+	if errors.Cause(jerr) != context.DeadlineExceeded {
+		t.Fatalf("%+v", jerr)
 	}
 
 	// Check that retries count is incremented.
@@ -95,7 +100,11 @@ func TestJobError(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 
-	if _, err := s.doJob(); errors.Cause(err) != jobErr {
+	_, jerr, err := s.doJob()
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	if errors.Cause(jerr) != jobErr {
 		t.Fatalf("%+v", err)
 	}
 
@@ -109,9 +118,13 @@ func TestJobError(t *testing.T) {
 	}
 
 	// Retry a few more times.
-	for i := 0; i < 3; i++ {
-		if _, err := s.doJob(); errors.Cause(err) != jobErr {
+	for i := 0; i < 2; i++ {
+		_, jerr, err = s.doJob()
+		if err != nil {
 			t.Fatalf("%+v", err)
+		}
+		if errors.Cause(jerr) != jobErr {
+			t.Fatalf("%+v", jerr)
 		}
 	}
 
@@ -125,8 +138,12 @@ func TestJobError(t *testing.T) {
 	}
 
 	// Last try.
-	if _, err := s.doJob(); err != nil {
+	_, jerr, err = s.doJob()
+	if err != nil {
 		t.Fatalf("%+v", err)
+	}
+	if errors.Cause(jerr) != jobErr {
+		t.Fatalf("%+v", jerr)
 	}
 
 	// After the last try, job should be moved to the dead letter queue.
@@ -137,7 +154,8 @@ func TestJobError(t *testing.T) {
 		t.Fatalf("%d", queued)
 	}
 	var jobB []byte
-	if err := s.DB.QueryRowContext(ctx, `SELECT job FROM `+camserver.TableDeadJob+` LIMIT 1`).Scan(&jobB); err != nil {
+	var scanJErr string
+	if err := s.DB.QueryRowContext(ctx, `SELECT job, err FROM `+camserver.TableDeadJob+` LIMIT 1`).Scan(&jobB, &scanJErr); err != nil {
 		t.Fatalf("%+v", err)
 	}
 	var deadJob Job
@@ -146,6 +164,10 @@ func TestJobError(t *testing.T) {
 	}
 	if deadJob.Func != jobForTesting {
 		t.Fatalf("%s", jobB)
+	}
+	line0 := strings.Split(scanJErr, "\n")[0]
+	if !strings.HasSuffix(line0, jobErr.Error()) {
+		t.Fatalf("%s", scanJErr)
 	}
 }
 

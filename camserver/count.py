@@ -144,6 +144,42 @@ class AI:
         rMux.streams.video[0].thread_type = "AUTO"
         rStream = rMux.streams.video[0]
 
+        # Write video.
+        wMux = av.open(dst, mode="w", format="mpegts")
+        wStream = wMux.add_stream("h264", rate=rStream.average_rate)
+        wStream.time_base = rStream.time_base
+        wStream.height = self.masker.mask.shape[0]
+        wStream.width = self.masker.mask.shape[1]
+        wStream.bit_rate = int(rMux.bit_rate * (wStream.height*wStream.width) / (rStream.height*rStream.width))
+        wStream.bit_rate = min(wStream.bit_rate, 2048*1024)
+
+        for packet in rMux.demux(rStream):
+            for frame in packet.decode():
+                img = frame.to_rgb().to_ndarray()
+                aiout = self._analyzeImg(img)
+                tracked = aiout.tracked.plot(aiout.masked.cpu().numpy())
+
+                wFrame = av.VideoFrame.from_ndarray(tracked, format="rgb24")
+                for pkt in wStream.encode(wFrame):
+                    wMux.mux(pkt)
+
+        rMux.close()
+        for pkt in wStream.encode():
+            wMux.mux(pkt)
+        wMux.close()
+
+        out = AIOutput()
+        out.Passed = self.tracker.passed()
+        return out, ""
+
+    def run1(self, dst: str, src: str) -> (AIOutput, str):
+        self.tracker.reset()
+
+        # Read video.
+        rMux = av.open(src)
+        rMux.streams.video[0].thread_type = "AUTO"
+        rStream = rMux.streams.video[0]
+
         video = Video(rStream.time_base, rStream.average_rate, rMux.bit_rate, rStream.height, rStream.width)
         for packet in rMux.demux(rStream):
             pkt = Packet(packet.time_base, packet.pts, packet.dts)
@@ -226,9 +262,11 @@ class Tracker:
         arg.track_buffer = 30
         self.tracker = ultralytics_trackers.BYTETracker(arg)
 
-        self.reset()
+        self.frameObjs = {}
+        self.objs = {}
 
     def reset(self):
+        self.tracker.reset()
         self.frameObjs = {}
         self.objs = {}
 
