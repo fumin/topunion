@@ -53,6 +53,8 @@ func (s *Server) DoJobForever() {
 	concurrency := max(1, runtime.NumCPU()-2)
 	for i := 0; i < concurrency; i++ {
 		go func() {
+			milliSec := i*1000 + rand.Intn(2000)
+			<-time.After(time.Duration(milliSec) * time.Millisecond)
 			for {
 				emptyQueue, err := s.doJob()
 				if err != nil {

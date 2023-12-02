@@ -26,6 +26,21 @@ const (
 	DBFilename = "db.sqlite"
 )
 
+//go:embed tmpl/status.html
+var statusHTML string
+var statusTmpl = template.Must(template.New("").Parse(statusHTML))
+
+func Status(s *Server, w http.ResponseWriter, r *http.Request) {
+	page, err := s.getStatusPage()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
+		return
+	}
+	if err := statusTmpl.Execute(w, page); err != nil {
+		log.Printf("%+v", err)
+	}
+}
+
 func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}, error) {
 	if err := r.ParseMultipartForm(32 * 1024 * 1024); err != nil {
 		return nil, errors.Wrap(err, "")
@@ -49,18 +64,20 @@ func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	if len(fh.Filename) < len(formatDatetime) {
 		return nil, errors.Errorf("%d", len(fh.Filename))
 	}
-	t, err := time.Parse(formatDatetime, fh.Filename[:len(formatDatetime)])
+	t, err := time.ParseInLocation(formatDatetime, fh.Filename[:len(formatDatetime)], time.UTC)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
 
 	// Save uploaded file.
 	ext := filepath.Ext(fh.Filename)
-	noext := strings.TrimSuffix(fh.Filename, ext)
-	dst := filepath.Join(s.VideoDir, t.Format("2006"), t.Format(util.FormatDate), cam, noext, "raw"+ext)
-	if err := os.MkdirAll(filepath.Dir(dst), os.ModePerm); err != nil {
+	videoID := strings.TrimSuffix(fh.Filename, ext)
+	videoDir := filepath.Join(s.VideoDir, cam, t.Format("2006"), t.Format(util.FormatDate), videoID)
+	reqDir := filepath.Join(videoDir, camserver.RawDir, util.RunID())
+	if err := os.MkdirAll(reqDir, os.ModePerm); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
+	dst := filepath.Join(reqDir, camserver.RawNoExt+ext)
 	if err := util.WriteFile(dst, f); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
@@ -68,6 +85,7 @@ func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	// Send background job.
 	jobArg := camserver.ProcessVideoInput{
 		Camera:   cam,
+		Dir:      videoDir,
 		Filepath: dst,
 		Time:     t,
 	}
@@ -75,6 +93,10 @@ func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := SendJob(ctx, s.DB, job); err != nil {
+		return nil, errors.Wrap(err, "")
+	}
+
+	if err := os.WriteFile(filepath.Join(reqDir, util.DoneFilename), []byte{}, os.ModePerm); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
 
@@ -217,6 +239,7 @@ func NewServer(config Config) (*Server, error) {
 		s.Camera[cam.Config.ID] = cam
 	}
 
+	handleFunc(s, "/Status", Status)
 	handleJSON(s, "/UploadVideo", UploadVideo)
 	s.ServeMux.Handle("/static/", http.FileServer(http.FS(staticFS)))
 	handleFunc(s, "/", Index)

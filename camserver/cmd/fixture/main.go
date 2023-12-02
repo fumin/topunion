@@ -41,11 +41,13 @@ func mainWithErr() error {
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
+	defer db.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := camserver.CreateTables(ctx, db); err != nil {
 		return errors.Wrap(err, "")
 	}
+
 	return nil
 }

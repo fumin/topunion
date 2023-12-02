@@ -1,0 +1,17 @@
+<html>
+<head>
+</head>
+<body>
+	<h1>Status</h1>
+	<div>
+	{{range .Camera}}
+		<div>
+			<h3>{{.ID}}</h3>
+			<div>{{.Latest}}</div>
+			<pre>{{.LatestErr}}</pre>
+		</div>
+	{{end}}
+	</div>
+</body>
+</html>
+

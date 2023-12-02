@@ -21,11 +21,6 @@ func TestProcessVideo(t *testing.T) {
 	env := newEnvironment(t)
 	defer env.close()
 
-	testVid := filepath.Join(env.dir, "test.mp4")
-	if err := util.CopyFile(testVid, filepath.Join("testing", "shilin20230826_sd.mp4")); err != nil {
-		t.Fatalf("%+v", err)
-	}
-
 	cfg := shilinSDConfig()
 	counter, err := NewCounter(env.dir, env.scripts.Count, cfg)
 	if err != nil {
@@ -33,8 +28,14 @@ func TestProcessVideo(t *testing.T) {
 	}
 	defer counter.Close()
 
+	testVid := filepath.Join(env.dir, "test.mp4")
+	if err := util.CopyFile(testVid, filepath.Join("testing", "shilin20230826_sd.mp4")); err != nil {
+		t.Fatalf("%+v", err)
+	}
+
 	arg := ProcessVideoInput{
 		Camera:   "testcam",
+		Dir:      env.dir,
 		Filepath: testVid,
 		Time:     time.Date(2023, time.December, 2, 1, 43, 22, 0, util.TaipeiTZ),
 	}
@@ -45,7 +46,7 @@ func TestProcessVideo(t *testing.T) {
 	}
 
 	// Check mpegts output.
-	runDir, err := lastDirEntry(filepath.Join(env.dir, JobDir))
+	runDir, err := lastDirEntry(filepath.Join(env.dir, ProcessVideoDir))
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}

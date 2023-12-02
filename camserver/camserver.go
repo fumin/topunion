@@ -22,7 +22,11 @@ const (
 	TableDeadJob = "deadjob"
 	TableStat    = "stat"
 
-	JobDir             = "job"
+	// Folder for the save raw video task.
+	RawDir   = "raw"
+	RawNoExt = "video"
+	// Folder for the process video task.
+	ProcessVideoDir    = "processvideo"
 	RawMPEGTSFilename  = "raw.ts"
 	CountVideoFilename = "count.ts"
 )
@@ -91,13 +95,13 @@ func NewScripts(dir string) (Scripts, error) {
 
 type ProcessVideoInput struct {
 	Camera   string
+	Dir      string
 	Filepath string
 	Time     time.Time
 }
 
 func ProcessVideo(ctx context.Context, db *sql.DB, counter *Counter, arg ProcessVideoInput) error {
-	runID := util.RandID()
-	dir := filepath.Join(filepath.Dir(arg.Filepath), JobDir, runID)
+	dir := filepath.Join(arg.Dir, ProcessVideoDir, util.RunID())
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
 		return errors.Wrap(err, "")
 	}
@@ -117,6 +121,9 @@ func ProcessVideo(ctx context.Context, db *sql.DB, counter *Counter, arg Process
 		return errors.Wrap(err, "")
 	}
 
+	if err := os.WriteFile(filepath.Join(dir, util.DoneFilename), []byte{}, os.ModePerm); err != nil {
+		return errors.Wrap(err, "")
+	}
 	return nil
 }
 

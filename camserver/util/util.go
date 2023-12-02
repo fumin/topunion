@@ -13,6 +13,7 @@ const (
 	FormatDate     = "20060102"
 	FormatDatetime = "20060102_150405"
 
+	DoneFilename   = "done.txt"
 	StdoutFilename = "stdout.txt"
 	StderrFilename = "stderr.txt"
 	StatusFilename = "status.txt"
@@ -35,6 +36,22 @@ func RandID() string {
 		s += string(c)
 	}
 	return s
+}
+
+func RunID() string {
+	return time.Now().In(time.UTC).Format(FormatDatetime) + "_" + RandID()
+}
+
+func ParseRunTime(id string) (time.Time, error) {
+	l := len(FormatDatetime)
+	if len(id) < l {
+		return time.Time{}, errors.Errorf("too short %d", len(id))
+	}
+	t, err := time.ParseInLocation(FormatDatetime, id[:l], time.UTC)
+	if err != nil {
+		return time.Time{}, errors.Wrap(err, "")
+	}
+	return t, nil
 }
 
 func IsAlphaNumeric(s string) error {

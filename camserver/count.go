@@ -142,7 +142,12 @@ func (c *Counter) run(ctx context.Context, script, cfgStr string) error {
 	}
 	c.setHost(host)
 	defer func() { c.setHost("") }()
-	close(c.gotFirstHost)
+	// Close gotFirstHost on the first run.
+	select {
+	case <-c.gotFirstHost:
+	default:
+		close(c.gotFirstHost)
+	}
 
 	if err := cmd.Wait(); err != nil {
 		b := []byte(fmt.Sprintf("%+v", err))

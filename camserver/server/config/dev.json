@@ -5,27 +5,54 @@
 	"Camera": [
 		{
 			"ID": "camera0",
-			"Height": 480,
-			"Width": 640,
+			"Height": 480, "Width": 640,
 			"Count": {
 				"Device": "cpu",
 				"Mask": {
 					"Enable": true,
-					"Crop": {
-						"X": 0,
-						"Y": 0,
-						"W": 999999
-					},
-					"Mask": {
-						"Slope": 0,
-						"Y": 0,
-						"H": 480
-					}
+					"Crop": {"X": 0, "Y": 0, "W": 999999},
+					"Mask": {"Slope": 0, "Y": 0, "H": 480}
 				},
-				"Yolo": {
-					"Weights": "yolo_best.pt",
-					"Size": 640
-				}
+				"Yolo": {"Weights": "yolo_best.pt", "Size": 640}
+			}
+		},
+		{
+			"ID": "Redmi12C",
+			"Height": 480, "Width": 640,
+			"Count": {
+				"Device": "cpu",
+				"Mask": {
+					"Enable": true,
+					"Crop": {"X": 0, "Y": 0, "W": 999999},
+					"Mask": {"Slope": 0, "Y": 0, "H": 480}
+				},
+				"Yolo": {"Weights": "yolo_best.pt", "Size": 640}
+			}
+		},
+		{
+			"ID": "RedmiNote4X",
+			"Height": 480, "Width": 640,
+			"Count": {
+				"Device": "cpu",
+				"Mask": {
+					"Enable": true,
+					"Crop": {"X": 0, "Y": 0, "W": 999999},
+					"Mask": {"Slope": 0, "Y": 0, "H": 480}
+				},
+				"Yolo": {"Weights": "yolo_best.pt", "Size": 640}
+			}
+		},
+		{
+			"ID": "Pixel5",
+			"Height": 480, "Width": 640,
+			"Count": {
+				"Device": "cpu",
+				"Mask": {
+					"Enable": true,
+					"Crop": {"X": 0, "Y": 0, "W": 999999},
+					"Mask": {"Slope": 0, "Y": 0, "H": 480}
+				},
+				"Yolo": {"Weights": "yolo_best.pt", "Size": 640}
 			}
 		}
 	]
