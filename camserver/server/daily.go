@@ -2,7 +2,6 @@ package server
 
 import (
 	"camserver/util"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -16,24 +15,37 @@ func DeleteOldVideos(root string, dur time.Duration) error {
 	cutoffDayStr := cutoff.Format(util.FormatDate)
 
 	olds := make([]string, 0)
-	years, err := os.ReadDir(root)
+	cameras, err := os.ReadDir(root)
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
-Loop:
-	for _, yearE := range years {
-		year := yearE.Name()
-		days, err := os.ReadDir(filepath.Join(root, year))
+	for _, camera := range cameras {
+		camDir := filepath.Join(root, camera.Name())
+		camOlds := make([]string, 0, 30)
+		years, err := os.ReadDir(camDir)
 		if err != nil {
-			return errors.Wrap(err, fmt.Sprintf("\"%s\"", year))
+			return errors.Wrap(err, "")
 		}
-		for _, dayE := range days {
-			day := dayE.Name()
-			if day >= cutoffDayStr {
-				break Loop
+	CamLoop:
+		for i := len(years) - 1; i >= 0; i-- {
+			yearDir := filepath.Join(camDir, years[i].Name())
+			days, err := os.ReadDir(yearDir)
+			if err != nil {
+				return errors.Wrap(err, "")
 			}
-			olds = append(olds, filepath.Join(root, year, day))
+			for j := len(days) - 1; j >= 0; j-- {
+				day := days[j].Name()
+				if day >= cutoffDayStr {
+					continue
+				}
+				dayDir := filepath.Join(yearDir, day)
+				camOlds = append(camOlds, dayDir)
+				if len(camOlds) >= 30 {
+					break CamLoop
+				}
+			}
 		}
+		olds = append(olds, camOlds...)
 	}
 
 	for _, old := range olds {
