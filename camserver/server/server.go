@@ -166,6 +166,10 @@ type Config struct {
 	Addr string
 
 	Camera []CameraConfig
+
+	// Suppport setting database max connections to alleviate sqlite issue:
+	// https://github.com/mattn/go-sqlite3/issues/209
+	SqliteMaxConn int
 }
 
 type Server struct {
@@ -209,9 +213,14 @@ func NewServer(config Config) (*Server, error) {
 	dbPath := filepath.Join(s.C.Dir, DBFilename)
 	dbV := url.Values{}
 	dbV.Set("_journal_mode", "WAL")
+	// https://github.com/mattn/go-sqlite3/issues/209
+	dbV.Set("_busy_timeout", "5000")
 	s.DB, err = sql.Open("sqlite3", "file:"+dbPath+"?"+dbV.Encode())
 	if err != nil {
 		return nil, errors.Wrap(err, "")
+	}
+	if s.C.SqliteMaxConn != 0 {
+		s.DB.SetMaxOpenConns(s.C.SqliteMaxConn)
 	}
 
 	s.VideoDir = filepath.Join(s.C.Dir, "video")
@@ -229,10 +238,9 @@ func NewServer(config Config) (*Server, error) {
 		}
 		cam := Camera{Config: camCfg}
 
-		countDir := filepath.Join(s.BackgroundProcessDir, camCfg.ID, "count")
 		camCfg.Count.Height = camCfg.Height
 		camCfg.Count.Width = camCfg.Width
-		cam.Counter, err = camserver.NewCounter(countDir, s.Scripts.Count, camCfg.Count)
+		cam.Counter, err = camserver.NewCounter(s.Scripts.Count, camCfg.Count)
 		if err != nil {
 			return nil, errors.Wrap(err, "")
 		}

@@ -3,14 +3,13 @@
 
 import argparse
 import datetime
-import http
-from http import server as httpserver
-import json
+# import http
+# from http import server as httpserver
 import inspect
 import json
 import logging
-import urllib
-import threading
+# import urllib
+# import threading
 import traceback
 
 import av
@@ -22,7 +21,7 @@ import torchvision
 import ultralytics
 from ultralytics import trackers as ultralytics_trackers
 
-import util
+# import util
 
 
 class Instances:
@@ -132,12 +131,10 @@ class AI:
         img = torch.from_numpy(np.zeros([cfg["Height"], cfg["Width"], numChannels], dtype=np.uint8)).to(cfg["Device"])
         _, masked, _ = self.masker.run(img)
         maskedShape = [masked.shape[0], masked.shape[1]]
-        self.yolo = Yolo(cfg["Yolo"], [maskedShape])
-
-        self.tracker = Tracker()
+        self.yolo = Yolo(cfg["Yolo"], cfg["Device"], [maskedShape])
 
     def run(self, dst: str, src: str) -> (AIOutput, str):
-        self.tracker.reset()
+        tracker = Tracker()
 
         # Read video.
         rMux = av.open(src)
@@ -153,98 +150,42 @@ class AI:
         wStream.bit_rate = int(rMux.bit_rate * (wStream.height*wStream.width) / (rStream.height*rStream.width))
         wStream.bit_rate = min(wStream.bit_rate, 2048*1024)
 
+        interval = 1 / wStream.time_base / wStream.codec_context.framerate
+        pts = -1
         for packet in rMux.demux(rStream):
             for frame in packet.decode():
+                if frame.pts < pts:
+                    continue
                 img = frame.to_rgb().to_ndarray()
-                aiout = self._analyzeImg(img)
+                aiout = self._analyzeImg(tracker, img)
                 tracked = aiout.tracked.plot(aiout.masked.cpu().numpy())
 
                 wFrame = av.VideoFrame.from_ndarray(tracked, format="rgb24")
+                wFrame.pts = int(pts)
                 for pkt in wStream.encode(wFrame):
                     wMux.mux(pkt)
 
+                pts += interval
+
         rMux.close()
         for pkt in wStream.encode():
             wMux.mux(pkt)
         wMux.close()
 
         out = AIOutput()
-        out.Passed = self.tracker.passed()
+        out.Passed = tracker.passed()
         return out, ""
 
-    def run1(self, dst: str, src: str) -> (AIOutput, str):
-        self.tracker.reset()
+    def _analyzeImg(self, tracker, im):
+        with torch.no_grad():
+            img = torch.from_numpy(im).to(self.cfg["Device"])
+            cropped, masked1, maskedViz = self.masker.run(img)
+            masked = [masked1]
 
-        # Read video.
-        rMux = av.open(src)
-        rMux.streams.video[0].thread_type = "AUTO"
-        rStream = rMux.streams.video[0]
-
-        video = Video(rStream.time_base, rStream.average_rate, rMux.bit_rate, rStream.height, rStream.width)
-        for packet in rMux.demux(rStream):
-            pkt = Packet(packet.time_base, packet.pts, packet.dts)
-
-            for frame in packet.decode():
-                img = frame.to_rgb().to_ndarray()
-                aiout = self._analyzeImg(img)
-
-                frm = Frame(frame.time_base, frame.pts, frame.dts, aiout)
-                pkt.frames.append(frm)
-
-            video.packets.append(pkt)
-
-        rMux.close()
-
-        frame0, ok = video.seek(-1)
-        if not ok:
-            return AIOutput(), f"no frames {inspect.getframeinfo(inspect.currentframe())}"
-
-        # Write video.
-        wMux = av.open(dst, mode="w", format="mpegts")
-        wStream = wMux.add_stream("h264", rate=video.rate)
-        wStream.time_base = video.time_base
-        wStream.height = frame0.aiout.masked.shape[0]
-        wStream.width = frame0.aiout.masked.shape[1]
-        wStream.bit_rate = int(video.bit_rate * (wStream.height*wStream.width) / (video.height*video.width))
-        wStream.bit_rate = min(wStream.bit_rate, 2048*1024)
-
-        interval = 1 / video.time_base / wStream.codec_context.framerate
-        pts = frame0.pts
-        while True:
-            frm, ok = video.seek(pts)
-            if not ok:
-                break
-
-            masked = frm.aiout.masked.cpu()
-            tracked = frm.aiout.tracked.plot(np.copy(masked))
-
-            frame = av.VideoFrame.from_ndarray(tracked, format="rgb24")
-            frame.pts = int(pts)
-
-            for pkt in wStream.encode(frame):
-                wMux.mux(pkt)
-
-            pts += interval
-
-        for pkt in wStream.encode():
-            wMux.mux(pkt)
-
-        wMux.close()
-
-        out = AIOutput()
-        out.Passed = self.tracker.passed()
-        return out, ""
-
-    def _analyzeImg(self, im):
-        img = torch.from_numpy(im).to(self.cfg["Device"])
-        cropped, masked1, maskedViz = self.masker.run(img)
-        masked = [masked1]
-
-        yoloOut = self.yolo.run(masked)
-        tracked = self.tracker.run(yoloOut[0])
-        aiout = AIFrameOutput(masked[0], tracked)
-        return aiout
-
+            yoloOut = self.yolo.run(masked)
+            tracked = tracker.run(yoloOut[0])
+            aiout = AIFrameOutput(maskedViz, tracked)
+            return aiout
 
 
 class Tracker:
@@ -347,9 +288,16 @@ class Masker:
 
 
 class Yolo:
-    def __init__(self, cfg, shapes):
-        self.model = ultralytics.YOLO(cfg["Weights"])
+    def __init__(self, cfg, device, shapes):
+        self.yolo = ultralytics.YOLO(cfg["Weights"])
         self.yoloSize = cfg["Size"]
+        # Coerce yolo to setup itself by running predict once.
+        bchw = torch.zeros([len(shapes), 3, self.yoloSize, self.yoloSize], dtype=float)
+        bchw = bchw.to(device)
+        half = False
+        if device.startswith("cuda"):
+            half = True
+        self.yolo.predict(bchw, half=half, verbose=False)
 
         self.functionals = []
         for shape in shapes:
@@ -391,10 +339,14 @@ class Yolo:
             chw = fn.pad(chw)
             chws.append(chw)
         bchw = torch.stack(chws, dim=0)
-        half = False
-        if bchw.device.type.startswith("cuda"):
-            half = True
-        results = self.model(bchw, half=half, verbose=False)
+
+        # Run torch model.
+        # We don't follow the usual Yolo usage since it is not thread safe.
+        model = self.yolo.predictor.model
+        if model.fp16:
+            bchw = bchw.half()
+        preds = model(bchw)
+        results = self.yolo.predictor.postprocess(preds, bchw, bchw)
 
         batch = []
         for i, result in enumerate(results):
@@ -420,49 +372,49 @@ class Yolo:
         return batch
 
 
-def Multipart(handler: httpserver.BaseHTTPRequestHandler):
-    forms, files = util.ReadMultipart(handler)
-    logging.info("req %s", forms["myname"])
-    logging.info("req %s", files["f"].filename)
-    logging.info("req %s", files["f"].file)
-
-
-def Analyze(handler: httpserver.BaseHTTPRequestHandler, ai: AI):
-    parsed = urllib.parse.urlparse(handler.path)
-    v = urllib.parse.parse_qs(parsed.query)
-    dst = v.get("dst", [""])[0]
-    src = v.get("src", [""])[0]
-
-    try:
-        aiout, err = ai.run(dst, src)
-    except Exception as e:
-        aiout, err = AIOutput(), traceback.format_exc()
-    if err:
-        util.HTTPRespJ(handler, 400, {"Error": ("%s %s" % (v, err))})
-        return
-
-    util.HTTPRespJ(handler, 200, vars(aiout))
-
-
-class MyServerHandler(httpserver.BaseHTTPRequestHandler):
-    def do_POST(self):
-        if self.path.startswith("/Quit"):
-            threading.Thread(target=self.server.shutdown).start()
-        elif self.path.startswith("/Analyze"):
-            Analyze(self, self.server.ai)
-        elif self.path.startswith("/Multipart"):
-            Multipart(self)
-        else:
-            util.HTTPRespJ(self, 200, {"hello": "world"})
-
-    def log_message(self, format, *args):
-        return
-
-
-class MyServer(httpserver.ThreadingHTTPServer):
-    def __init__(self, server_address, RequestHandlerClass, cfg):
-        super().__init__(server_address, RequestHandlerClass)
-        self.ai = AI(cfg)
+# def Multipart(handler: httpserver.BaseHTTPRequestHandler):
+#     forms, files = util.ReadMultipart(handler)
+#     logging.info("req %s", forms["myname"])
+#     logging.info("req %s", files["f"].filename)
+#     logging.info("req %s", files["f"].file)
+# 
+# 
+# def Analyze(handler: httpserver.BaseHTTPRequestHandler, ai: AI):
+#     parsed = urllib.parse.urlparse(handler.path)
+#     v = urllib.parse.parse_qs(parsed.query)
+#     dst = v.get("dst", [""])[0]
+#     src = v.get("src", [""])[0]
+# 
+#     try:
+#         aiout, err = ai.run(dst, src)
+#     except Exception as e:
+#         aiout, err = AIOutput(), traceback.format_exc()
+#     if err:
+#         util.HTTPRespJ(handler, 400, {"Error": ("%s %s" % (v, err))})
+#         return
+# 
+#     util.HTTPRespJ(handler, 200, vars(aiout))
+# 
+# 
+# class MyServerHandler(httpserver.BaseHTTPRequestHandler):
+#     def do_POST(self):
+#         if self.path.startswith("/Quit"):
+#             threading.Thread(target=self.server.shutdown).start()
+#         elif self.path.startswith("/Analyze"):
+#             Analyze(self, self.server.ai)
+#         elif self.path.startswith("/Multipart"):
+#             Multipart(self)
+#         else:
+#             util.HTTPRespJ(self, 200, {"hello": "world"})
+# 
+#     def log_message(self, format, *args):
+#         return
+# 
+# 
+# class MyServer(httpserver.ThreadingHTTPServer):
+#     def __init__(self, server_address, RequestHandlerClass, cfg):
+#         super().__init__(server_address, RequestHandlerClass)
+#         self.ai = AI(cfg)
 
 
 class StructuredMessage:
@@ -486,6 +438,8 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-c")
+    parser.add_argument("-dst")
+    parser.add_argument("-src")
     args = parser.parse_args()
 
     err = mainWithErr(args)
@@ -497,12 +451,28 @@ def mainWithErr(args):
     cfg = json.loads(args.c)
     logging.info(_l("config", **cfg))
 
-    httpd = MyServer(("localhost", 0), MyServerHandler, cfg)
-    port = httpd.server_address[1]
-    host = "http://localhost:%d" % port
-    logging.info(_l("host", Host=host))
-    httpd.serve_forever()
-    return None
+    dst = args.dst
+    src = args.src
+    ai = AI(cfg)
+    try:
+        aiout, err = ai.run(dst, src)
+    except Exception as e:
+        aiout, err = AIOutput(), traceback.format_exc()
+    if err:
+        print(json.dumps({"Status": 400, "Body": {"Error": ("%s %s" % (v, err))}}))
+        return
+
+    print(json.dumps({"Status": 200, "Body": vars(aiout)}))
+
+    # Since both pyav and ultralytics don't support multithreading, don't use HTTP.
+    # Plus, there are serious memory leaks.
+    #
+    # httpd = MyServer(("localhost", 0), MyServerHandler, cfg)
+    # port = httpd.server_address[1]
+    # host = "http://localhost:%d" % port
+    # logging.info(_l("host", Host=host))
+    # httpd.serve_forever()
+    # return None
 
 
 if __name__ == "__main__":

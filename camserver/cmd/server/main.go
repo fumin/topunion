@@ -71,6 +71,8 @@ func mainWithErr() error {
 	}
 	log.Printf("%#v", config)
 
+	// https://github.com/mattn/go-sqlite3/issues/209
+	config.SqliteMaxConn = 1
 	s, err := server.NewServer(config)
 	if err != nil {
 		return errors.Wrap(err, "")

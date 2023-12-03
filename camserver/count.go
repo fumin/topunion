@@ -2,6 +2,7 @@ package camserver
 
 import (
 	"bufio"
+	"bytes"
 	"camserver/util"
 	"context"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -41,6 +43,51 @@ type CountConfig struct {
 }
 
 type Counter struct {
+	arg [4]string
+}
+
+func NewCounter(script string, cfg CountConfig) (*Counter, error) {
+	cfgB, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, errors.Wrap(err, "")
+	}
+	cfgStr := string(cfgB)
+
+	c := &Counter{}
+	c.arg[0] = script
+	c.arg[1] = "-c=" + cfgStr
+	return c, nil
+}
+
+func (c *Counter) Close() {
+}
+
+func (c *Counter) Analyze(ctx context.Context, dst, src string) (CountOutput, error) {
+	c.arg[2] = "-dst=" + dst
+	c.arg[3] = "-src=" + src
+	cmd := exec.CommandContext(ctx, "python", c.arg[:]...)
+	stdout, stderr := bytes.NewBuffer(nil), bytes.NewBuffer(nil)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	if err := cmd.Run(); err != nil {
+		return CountOutput{}, errors.Wrap(err, "")
+	}
+	outB, errB := stdout.Bytes(), stderr.Bytes()
+
+	resp := struct {
+		Status int
+		Body   CountOutput
+	}{}
+	if err := json.Unmarshal(outB, &resp); err != nil {
+		return CountOutput{}, errors.Wrap(err, fmt.Sprintf("\"%s\" \"%s\"", outB, errB))
+	}
+	if resp.Status != http.StatusOK {
+		return CountOutput{}, errors.Errorf("\"%s\" \"%s\"", outB, errB)
+	}
+	return resp.Body, nil
+}
+
+// CounterServer runs the HTTP server based version of count.py.
+type CounterServer struct {
 	sync.RWMutex
 	dir string
 
@@ -52,7 +99,7 @@ type Counter struct {
 	gotFirstHost chan struct{}
 }
 
-func NewCounter(dir, script string, cfg CountConfig) (*Counter, error) {
+func NewCounterServer(dir, script string, cfg CountConfig) (*CounterServer, error) {
 	cfgB, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
@@ -60,7 +107,7 @@ func NewCounter(dir, script string, cfg CountConfig) (*Counter, error) {
 	cfgStr := string(cfgB)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	c := &Counter{dir: dir, cancel: cancel, done: make(chan struct{})}
+	c := &CounterServer{dir: dir, cancel: cancel, done: make(chan struct{})}
 	c.gotFirstHost = make(chan struct{})
 	go func() {
 		defer close(c.done)
@@ -80,7 +127,7 @@ func NewCounter(dir, script string, cfg CountConfig) (*Counter, error) {
 	return c, nil
 }
 
-func (c *Counter) Close() {
+func (c *CounterServer) Close() {
 	c.cancel()
 	<-c.done
 }
@@ -89,7 +136,7 @@ type CountOutput struct {
 	Passed int
 }
 
-func (c *Counter) Analyze(ctx context.Context, dst, src string) (CountOutput, error) {
+func (c *CounterServer) Analyze(ctx context.Context, dst, src string) (CountOutput, error) {
 	v := url.Values{}
 	v.Set("dst", dst)
 	v.Set("src", src)
@@ -118,7 +165,7 @@ func (c *Counter) Analyze(ctx context.Context, dst, src string) (CountOutput, er
 	return out, nil
 }
 
-func (c *Counter) run(ctx context.Context, script, cfgStr string) error {
+func (c *CounterServer) run(ctx context.Context, script, cfgStr string) error {
 	cmd, stdout, stderr, status, err := util.NewCmd(ctx, c.dir, "python", []string{script, "-c=" + cfgStr})
 	if err != nil {
 		return errors.Wrap(err, "")
@@ -158,13 +205,13 @@ func (c *Counter) run(ctx context.Context, script, cfgStr string) error {
 	return nil
 }
 
-func (c *Counter) getHost() string {
+func (c *CounterServer) getHost() string {
 	c.RLock()
 	defer c.RUnlock()
 	return c.host
 }
 
-func (c *Counter) setHost(host string) {
+func (c *CounterServer) setHost(host string) {
 	c.Lock()
 	defer c.Unlock()
 	c.host = host

@@ -13,7 +13,7 @@ func TestCounter(t *testing.T) {
 	defer env.close()
 
 	cfg := shilinSDConfig()
-	counter, err := NewCounter(env.dir, env.scripts.Count, cfg)
+	counter, err := NewCounter(env.scripts.Count, cfg)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
