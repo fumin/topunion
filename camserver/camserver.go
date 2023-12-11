@@ -49,10 +49,10 @@ func CreateTables(ctx context.Context, db *sql.DB) error {
 			PRIMARY KEY (id)
 		) STRICT`,
 		`CREATE TABLE ` + TableStat + ` (
-			date TEXT,
+			dateHour TEXT,
 			camera TEXT,
 			n INTEGER,
-			PRIMARY KEY (date, camera)
+			PRIMARY KEY (dateHour, camera)
 		) STRICT`,
 	}
 	for _, sqlStr := range sqlStrs {
@@ -159,7 +159,7 @@ func toMPEGTS(ctx context.Context, dst, src string) error {
 }
 
 func incrStat(ctx context.Context, db *sql.DB, t time.Time, camera string, diff int) error {
-	date := t.In(time.UTC).Format(util.FormatDate)
+	dateHour := t.In(time.UTC).Format(util.FormatDateHour)
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -167,16 +167,16 @@ func incrStat(ctx context.Context, db *sql.DB, t time.Time, camera string, diff 
 	}
 	defer tx.Rollback()
 
-	selectStr := `SELECT n FROM ` + TableStat + ` WHERE date=? AND camera=?`
+	selectStr := `SELECT n FROM ` + TableStat + ` WHERE dateHour=? AND camera=?`
 	var n int
-	if err := tx.QueryRowContext(ctx, selectStr, date, camera).Scan(&n); err != nil {
+	if err := tx.QueryRowContext(ctx, selectStr, dateHour, camera).Scan(&n); err != nil {
 		if err != sql.ErrNoRows {
 			return errors.Wrap(err, "")
 		}
 	}
 
-	insertStr := `REPLACE INTO ` + TableStat + ` (date, camera, n) VALUES (?, ?, ?)`
-	if _, err := tx.ExecContext(ctx, insertStr, date, camera, n+diff); err != nil {
+	insertStr := `REPLACE INTO ` + TableStat + ` (dateHour, camera, n) VALUES (?, ?, ?)`
+	if _, err := tx.ExecContext(ctx, insertStr, dateHour, camera, n+diff); err != nil {
 		return errors.Wrap(err, "")
 	}
 
@@ -187,10 +187,10 @@ func incrStat(ctx context.Context, db *sql.DB, t time.Time, camera string, diff 
 }
 
 func readStat(ctx context.Context, db *sql.DB, t time.Time, camera string) (int, error) {
-	date := t.In(time.UTC).Format(util.FormatDate)
-	selectStr := `SELECT n FROM ` + TableStat + ` WHERE date=? AND camera=?`
+	dateHour := t.In(time.UTC).Format(util.FormatDateHour)
+	selectStr := `SELECT n FROM ` + TableStat + ` WHERE dateHour=? AND camera=?`
 	var n int
-	if err := db.QueryRowContext(ctx, selectStr, date, camera).Scan(&n); err != nil {
+	if err := db.QueryRowContext(ctx, selectStr, dateHour, camera).Scan(&n); err != nil {
 		return -1, errors.Wrap(err, "")
 	}
 	return n, nil

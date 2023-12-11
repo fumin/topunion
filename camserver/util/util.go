@@ -11,6 +11,7 @@ import (
 
 const (
 	FormatDate     = "20060102"
+	FormatDateHour = "20060102_15"
 	FormatDatetime = "20060102_150405"
 
 	DoneFilename   = "done.txt"

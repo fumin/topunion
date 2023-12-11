@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"embed"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/template"
 	"time"
@@ -107,12 +109,86 @@ func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	return resp, nil
 }
 
+type stat struct {
+	dateHour string
+	camera   string
+	n        int
+}
+
+func readLatestStat(ctx context.Context, db *sql.DB, cutoffT time.Time) ([]stat, error) {
+	cutoff := cutoffT.In(time.UTC).Format(util.FormatDateHour)
+	sqlStr := `SELECT dateHour, camera, n FROM ` + camserver.TableStat + ` WHERE dateHour > ?`
+	rows, err := db.QueryContext(ctx, sqlStr, cutoff)
+	if err != nil {
+		return nil, errors.Wrap(err, "")
+	}
+	defer rows.Close()
+
+	stats := make([]stat, 0)
+	for rows.Next() {
+		var s stat
+		if err := rows.Scan(&s.dateHour, &s.camera, &s.n); err != nil {
+			return nil, errors.Wrap(err, "")
+		}
+		stats = append(stats, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.Wrap(err, "")
+	}
+	return stats, nil
+}
+
 //go:embed tmpl/index.html
 var indexHTML string
 var indexTmpl = template.Must(template.New("").Parse(indexHTML))
 
 func Index(s *Server, w http.ResponseWriter, r *http.Request) {
-	page := struct{}{}
+	cutoff := time.Now().AddDate(0, 0, -7)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	stats, err := readLatestStat(ctx, s.DB, cutoff)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
+		return
+	}
+
+	type datum struct {
+		DateHour time.Time
+		Camera   map[string]int
+	}
+	dataM := make(map[string]datum)
+	camerasM := make(map[string]struct{})
+	for _, s := range stats {
+		d, ok := dataM[s.dateHour]
+		if !ok {
+			d.DateHour, err = time.ParseInLocation(util.FormatDateHour, s.dateHour, time.UTC)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
+				return
+			}
+		}
+		d.Camera[s.camera] = s.n
+
+		dataM[s.dateHour] = d
+		camerasM[s.camera] = struct{}{}
+	}
+	data := make([]datum, 0, len(dataM))
+	for _, d := range dataM {
+		data = append(data, d)
+	}
+	slices.SortFunc(data, func(a, b datum) int { return -cmp.Compare(a.DateHour.Unix(), b.DateHour.Unix()) })
+	cameras := make([]string, 0, len(camerasM))
+	for c := range camerasM {
+		cameras = append(cameras, c)
+	}
+	slices.Sort(cameras)
+
+	page := struct {
+		Camera []string
+		Data   []datum
+	}{}
+	page.Camera = cameras
+	page.Data = data
 	indexTmpl.Execute(w, page)
 }
 

@@ -60,7 +60,7 @@ func TestProcessVideo(t *testing.T) {
 	}
 
 	// Check count.
-	qt := time.Date(2023, time.December, 1, 0, 0, 0, 0, time.UTC)
+	qt := time.Date(2023, time.December, 1, 17, 0, 0, 0, time.UTC)
 	n, err := readStat(ctx, env.db, qt, arg.Camera)
 	if err != nil {
 		t.Fatalf("%+v", err)
