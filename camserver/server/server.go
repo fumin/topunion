@@ -161,11 +161,13 @@ func Index(s *Server, w http.ResponseWriter, r *http.Request) {
 	for _, s := range stats {
 		d, ok := dataM[s.dateHour]
 		if !ok {
+			d.Camera = make(map[string]int)
 			d.DateHour, err = time.ParseInLocation(util.FormatDateHour, s.dateHour, time.UTC)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
 				return
 			}
+			d.DateHour = d.DateHour.In(util.TaipeiTZ)
 		}
 		d.Camera[s.camera] = s.n
 
@@ -189,7 +191,9 @@ func Index(s *Server, w http.ResponseWriter, r *http.Request) {
 	}{}
 	page.Camera = cameras
 	page.Data = data
-	indexTmpl.Execute(w, page)
+	if err := indexTmpl.Execute(w, page); err != nil {
+		log.Printf("%+v", err)
+	}
 }
 
 func handleFunc(s *Server, httpPath string, fn func(*Server, http.ResponseWriter, *http.Request)) {

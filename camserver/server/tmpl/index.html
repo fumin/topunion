@@ -33,13 +33,13 @@ table, th, td {
 		{{end}}
 	</tr></thead>
 	<tbody>
-	{{$cameras = .Camera}}
+	{{$cameras := .Camera}}
 	{{range .Data}}
-		{{$datum = .}}
+		{{$datum := .}}
 		<tr>
 			<td>{{$datum.DateHour}}</td>
 			{{range $cameras}}
-			{{$camName = .}}
+			{{$camName := .}}
 			<td>{{index $datum.Camera $camName}}</td>
 			{{end}}
 		</tr>
