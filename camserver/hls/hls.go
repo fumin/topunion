@@ -31,7 +31,9 @@ func (p Playlist) Bytes() []byte {
 	b.WriteString(fmt.Sprintf("#EXT-X-TARGETDURATION:%f\n", targetDuration))
 	b.WriteString("#EXT-X-VERSION:4\n")
 	b.WriteString(fmt.Sprintf("#EXT-X-MEDIA-SEQUENCE:%d\n", p.MediaSequence))
+	b.WriteString(fmt.Sprintf("#EXT-X-DISCONTINUITY-SEQUENCE:%d\n", p.MediaSequence))
 	for _, s := range p.Segment {
+		b.WriteString("#EXT-X-DISCONTINUITY\n")
 		b.WriteString(fmt.Sprintf("#EXTINF:%f,\n", s.Duration))
 		b.WriteString(s.URL + "\n")
 	}

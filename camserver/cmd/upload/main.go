@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"camserver/util"
 	"context"
 	"flag"
 	"io"
@@ -15,7 +16,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-func uploadVideoBody() (string, io.Reader, error) {
+func uploadVideoBody(t time.Time) (string, io.Reader, error) {
 	vidPath := filepath.Join("testing", "shilin20230826_sd.mp4")
 	vid, err := os.Open(vidPath)
 	if err != nil {
@@ -30,7 +31,8 @@ func uploadVideoBody() (string, io.Reader, error) {
 		return "", nil, errors.Wrap(err, "")
 	}
 
-	fw, err := w.CreateFormFile("f", "20060102_150405")
+	fname := t.In(time.UTC).Format(util.FormatDatetime) + ".mp4"
+	fw, err := w.CreateFormFile("f", fname)
 	if err != nil {
 		return "", nil, errors.Wrap(err, "")
 	}
@@ -44,9 +46,9 @@ func uploadVideoBody() (string, io.Reader, error) {
 	return w.FormDataContentType(), body, nil
 }
 
-func uploadVideo() error {
+func uploadVideo(t time.Time) error {
 	urlStr := "http://localhost:8080/UploadVideo"
-	contentType, reqBody, err := uploadVideoBody()
+	contentType, reqBody, err := uploadVideoBody(t)
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
@@ -84,8 +86,12 @@ func main() {
 }
 
 func mainWithErr() error {
-	if err := uploadVideo(); err != nil {
-		return errors.Wrap(err, "")
+	for {
+		startT := time.Now()
+		if err := uploadVideo(startT); err != nil {
+			return errors.Wrap(err, "")
+		}
+		<-time.After(startT.Add(10 * time.Second).Sub(time.Now()))
 	}
 	return nil
 }

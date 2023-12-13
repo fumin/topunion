@@ -72,7 +72,7 @@ func getCameraStatus(s *Server, id string) (CameraStatus, error) {
 	}
 	status := CameraStatus{
 		ID:   id,
-		T:    *t,
+		T:    t.In(util.TaipeiTZ),
 		Live: PathLive + "?" + url.Values{"c": {id}}.Encode(),
 	}
 	return status, nil
@@ -130,6 +130,7 @@ func Live(s *Server, w http.ResponseWriter, r *http.Request) {
 		playlist.Segment[i].URL = PathServe + "?" + v.Encode()
 	}
 
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Write(playlist.Bytes())
 }
 
@@ -301,6 +302,7 @@ func Index(s *Server, w http.ResponseWriter, r *http.Request) {
 
 func Serve(s *Server, w http.ResponseWriter, r *http.Request) {
 	fpath := r.FormValue("f")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	http.ServeFile(w, r, fpath)
 }
 
