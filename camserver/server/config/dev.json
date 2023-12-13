@@ -18,7 +18,7 @@
 		},
 		{
 			"ID": "camera1",
-			"Height": 480, "Width": 640,
+			"Height": 480, "Width": 720,
 			"Count": {
 				"Device": "cpu",
 				"Mask": {

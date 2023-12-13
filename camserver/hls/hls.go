@@ -3,6 +3,7 @@ package hls
 import (
 	"bytes"
 	"fmt"
+	"math"
 )
 
 type Segment struct {
@@ -22,6 +23,8 @@ func (p Playlist) Bytes() []byte {
 			targetDuration = s.Duration
 		}
 	}
+	// Add some margin to target duration, so that it is strictly larger.
+	targetDuration = math.Ceil(targetDuration) + 1
 
 	b := bytes.NewBuffer(nil)
 	b.WriteString("#EXTM3U\n")

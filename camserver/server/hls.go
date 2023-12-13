@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 
 	"github.com/pkg/errors"
 
@@ -44,8 +45,12 @@ func getPlaylist(root string) (hls.Playlist, error) {
 		}
 		seg.URL = path.Join(pvDir, doneProcess, camserver.CountVideoFilename)
 
+		pl.MediaSequence = i
 		pl.Segment = append(pl.Segment, seg)
 	}
+
+	// Sort segments ascending.
+	slices.Reverse(pl.Segment)
 
 	return pl, nil
 }
