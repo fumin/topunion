@@ -1,17 +1,22 @@
 package hls
 
+import (
+	"bytes"
+	"fmt"
+)
+
 type Segment struct {
-	URL string
+	URL      string
 	Duration float64
 }
 
 type Playlist struct {
 	MediaSequence int
-	Segment []Segment
+	Segment       []Segment
 }
 
 func (p Playlist) Bytes() []byte {
-	targetDuration := -1
+	var targetDuration float64 = -1
 	for _, s := range p.Segment {
 		if targetDuration < s.Duration {
 			targetDuration = s.Duration
@@ -25,7 +30,7 @@ func (p Playlist) Bytes() []byte {
 	b.WriteString(fmt.Sprintf("#EXT-X-MEDIA-SEQUENCE:%d\n", p.MediaSequence))
 	for _, s := range p.Segment {
 		b.WriteString(fmt.Sprintf("#EXTINF:%f,\n", s.Duration))
-		b.WriteString(s.URL+"\n")
+		b.WriteString(s.URL + "\n")
 	}
 	return b.Bytes()
 }

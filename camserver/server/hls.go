@@ -1,8 +1,7 @@
-package camserver
+package server
 
 import (
 	"camserver"
-	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -26,7 +25,7 @@ func getPlaylist(root string) (hls.Playlist, error) {
 		if len(pl.Segment) > 5 {
 			break
 		}
-		segDir := filepath.Join(dayDir, segDE.Name())
+		segDir := filepath.Join(root, segDE.Name())
 		rawDir := filepath.Join(segDir, camserver.RawDir)
 		doneRaw, err := util.GetDoneTry(rawDir)
 		if err != nil {

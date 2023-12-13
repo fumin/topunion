@@ -2,9 +2,11 @@ package util
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/pkg/errors"
@@ -126,18 +128,18 @@ func ReadVideoDuration(ctx context.Context, r io.Reader) (float64, error) {
 }
 
 func GetDoneTry(root string) (string, error) {
-        retries, err := os.ReadDir(root)
-        if err != nil {
-                return "", errors.Wrap(err, "")
-        }
-        for j := len(retries) - 1; j >= 0; j-- {
-                retry := retries[j]
+	retries, err := os.ReadDir(root)
+	if err != nil {
+		return "", errors.Wrap(err, "")
+	}
+	for j := len(retries) - 1; j >= 0; j-- {
+		retry := retries[j]
 
-                donePath := filepath.Join(root, retry.Name(), DoneFilename)
-                if _, err := os.Stat(donePath); err != nil {
-                        continue
-                }
-                return retry.Name(), nil
-        }
+		donePath := filepath.Join(root, retry.Name(), DoneFilename)
+		if _, err := os.Stat(donePath); err != nil {
+			continue
+		}
+		return retry.Name(), nil
+	}
 	return "", errors.Errorf("not found")
 }

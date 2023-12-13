@@ -7,6 +7,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"io"
 	"log"
 	"net/http"
@@ -15,7 +16,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"text/template"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -28,40 +28,53 @@ import (
 const (
 	DBFilename = "db.sqlite"
 
-	PathLive = "/Live"
+	PathLive  = "/Live"
 	PathServe = "/Serve"
 )
 
 type CameraStatus struct {
-        ID        string
-        T    time.Time
-        Live string
+	ID   string
+	T    time.Time
+	Live string
 
 	Err string
 }
 
 func getCameraStatus(s *Server, id string) (CameraStatus, error) {
 	camDir := filepath.Join(s.VideoDir, id)
-        day, err := latestDay(camDir)
-        if err != nil {
+	day, err := latestDay(camDir)
+	if err != nil {
 		return CameraStatus{}, errors.Wrap(err, "")
-        }
-        dayDir := filepath.Join(camDir, day[0], day[1])
-
-	segs, err := os.ReadDir(dayDir)
-        if err != nil {
-		return CameraStatus{}, errors.Wrap(err, "")
-        }
-	for i := len(segs) - 1; i >= 0; i-- {
-                segDE := segs[i]
-
-                rawDir := filepath.Join(dayDir, segDE.Name(), camserver.RawDir)
-                doneRaw, err := util.GetDoneTry(rawDir)
-                if err != nil {
-                        continue
-                }
 	}
+	dayDir := filepath.Join(camDir, day[0], day[1])
 
+	var t *time.Time
+	segs, err := os.ReadDir(dayDir)
+	if err != nil {
+		return CameraStatus{}, errors.Wrap(err, "")
+	}
+	for i := len(segs) - 1; i >= 0; i-- {
+		segDE := segs[i]
+
+		rawDir := filepath.Join(dayDir, segDE.Name(), camserver.RawDir)
+		doneRaw, err := util.GetDoneTry(rawDir)
+		if err != nil {
+			continue
+		}
+		doneBody := struct{ T time.Time }{}
+		if err := util.ReadJSONFile(filepath.Join(rawDir, doneRaw, util.DoneFilename), &doneBody); err != nil {
+			continue
+		}
+		t = &doneBody.T
+	}
+	if t == nil {
+		return CameraStatus{}, errors.Errorf("not found %#v", day)
+	}
+	status := CameraStatus{
+		ID:   id,
+		T:    *t,
+		Live: PathLive + "?" + url.Values{"c": {id}}.Encode(),
+	}
 	return status, nil
 }
 
@@ -71,18 +84,19 @@ var statusTmpl = template.Must(template.New("").Parse(statusHTML))
 
 func Status(s *Server, w http.ResponseWriter, r *http.Request) {
 	camIDs := make([]string, 0, len(s.Camera))
-        for id := range s.Camera {
-                camIDs = append(camIDs, id)
-        }
-        slices.Sort(camIDs)
+	for id := range s.Camera {
+		camIDs = append(camIDs, id)
+	}
+	slices.Sort(camIDs)
 
 	type StatusPage struct {
-	        Camera []CameraStatus
+		Camera []CameraStatus
 	}
-        var page StatusPage
-        for _, id := range camIDs {
-                c, err := getCameraStatus(id)
+	var page StatusPage
+	for _, id := range camIDs {
+		c, err := getCameraStatus(s, id)
 		if err != nil {
+			c.ID = id
 			c.Err = fmt.Sprintf("%+v", err)
 		}
 		page.Camera = append(page.Camera, c)
@@ -98,22 +112,22 @@ func Live(s *Server, w http.ResponseWriter, r *http.Request) {
 
 	camDir := filepath.Join(s.VideoDir, cam)
 	day, err := latestDay(camDir)
-        if err != nil {
+	if err != nil {
 		http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
 		return
-        }
-        dayDir := filepath.Join(camDir, day[0], day[1])
+	}
+	dayDir := filepath.Join(camDir, day[0], day[1])
 	playlist, err := getPlaylist(dayDir)
-        if err != nil {
+	if err != nil {
 		http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
 		return
-        }
+	}
 
 	// Rewrite file path URLs.
 	for i, s := range playlist.Segment {
 		v := url.Values{}
 		v.Set("f", s.URL)
-		playlist.Segment[i].URL = PathServe+"?"+v.Encode()
+		playlist.Segment[i].URL = PathServe + "?" + v.Encode()
 	}
 
 	w.Write(playlist.Bytes())
@@ -178,7 +192,14 @@ func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 		return nil, errors.Wrap(err, "")
 	}
 
-	doneB, err := json.Marshal(struct{ Duration float64 }{Duration: vidDur})
+	doneBody := struct {
+		T        time.Time
+		Duration float64
+	}{
+		T:        t,
+		Duration: vidDur,
+	}
+	doneB, err := json.Marshal(doneBody)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
@@ -199,10 +220,9 @@ type stat struct {
 	n        int
 }
 
-func readLatestStat(ctx context.Context, db *sql.DB, cutoffT time.Time) ([]stat, error) {
-	cutoff := cutoffT.In(time.UTC).Format(util.FormatDateHour)
-	sqlStr := `SELECT dateHour, camera, n FROM ` + camserver.TableStat + ` WHERE dateHour > ?`
-	rows, err := db.QueryContext(ctx, sqlStr, cutoff)
+func readLatestStat(ctx context.Context, db *sql.DB) ([]stat, error) {
+	sqlStr := `SELECT dateHour, camera, n FROM ` + camserver.TableStat + ` ORDER BY dateHour DESC LIMIT 80`
+	rows, err := db.QueryContext(ctx, sqlStr)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
@@ -227,10 +247,9 @@ var indexHTML string
 var indexTmpl = template.Must(template.New("").Parse(indexHTML))
 
 func Index(s *Server, w http.ResponseWriter, r *http.Request) {
-	cutoff := time.Now().AddDate(0, 0, -7)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	stats, err := readLatestStat(ctx, s.DB, cutoff)
+	stats, err := readLatestStat(ctx, s.DB)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
 		return

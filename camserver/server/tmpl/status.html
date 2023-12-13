@@ -1,17 +1,46 @@
 <html>
 <head>
+	<!--
+	<script src="/static/mpegts/mpegts.js"></script>
+	-->
+	<script src="/static/hls.js"></script>
+
+	<script src="/static/util.js"></script>
 </head>
 <body>
 	<h1>Status</h1>
 	<div>
 	{{range .Camera}}
-		<div>
+		<div id="{{.ID}}">
 			<h3>{{.ID}}</h3>
-			<div>{{.Latest}}</div>
-			<pre>{{.LatestErr}}</pre>
+			<div>{{.T}}</div>
+			<video controls muted autoplay style="max-width: 100%; max-height: 98vh;"></video>
+			<!--
+			<pre>{{.Err}}</pre>
+			-->
 		</div>
 	{{end}}
 	</div>
+
+	<script>
+let page = {{.}};
+
+function display(cam) {
+	if (cam.Err) {
+		return;
+	}
+	let video = document.querySelector("#"+cam.ID+" video");
+	util.playHLS(video, cam.Live);
+}
+
+function main(page) {
+	for (let i = 0; i < page.Camera.length; i++) {
+		let cam = page.Camera[i];
+
+		display(cam);
+	}
+}
+main(page);
+	</script>
 </body>
 </html>
-
