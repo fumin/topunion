@@ -103,9 +103,9 @@ cat > /etc/netplan/01-network-manager-all.yaml <<- EOM
 network:
   version: 2
   renderer: NetworkManager
-  ethernets:
-    ${ETHERNET_IFACE}:
-      addresses: [${ETHERNET_IP}/24]
+  # ethernets:
+  #   ${ETHERNET_IFACE}:
+  #     addresses: [${ETHERNET_IP}/24]
   wifis:
     ${WIFI_LAN_IFACE}:
       regulatory-domain: US
