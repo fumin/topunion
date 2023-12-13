@@ -50,6 +50,7 @@ class Instances:
                         thickness=text_thickness)
 
         msg = f"{self.frameObjs} {self.objs}"
+        msg = ""
         text_scale *= 3
         cv2.putText(im, msg,
                     (0, int(15 * text_scale)), cv2.FONT_HERSHEY_PLAIN, text_scale, (255, 0, 0), thickness=2)
