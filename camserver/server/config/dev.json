@@ -4,7 +4,7 @@
 	"Addr": ":8080",
 	"Camera": [
 		{
-			"ID": "FuminPhone",
+			"ID": "camera0",
 			"Height": 480, "Width": 640,
 			"Count": {
 				"Device": "cpu",
@@ -17,7 +17,7 @@
 			}
 		},
 		{
-			"ID": "Redmi12C",
+			"ID": "camera1",
 			"Height": 480, "Width": 640,
 			"Count": {
 				"Device": "cpu",
@@ -30,7 +30,7 @@
 			}
 		},
 		{
-			"ID": "RedmiNote4X",
+			"ID": "camera2",
 			"Height": 480, "Width": 640,
 			"Count": {
 				"Device": "cpu",
@@ -43,7 +43,59 @@
 			}
 		},
 		{
-			"ID": "Pixel5",
+			"ID": "camera3",
+			"Height": 480, "Width": 640,
+			"Count": {
+				"Device": "cpu",
+				"Mask": {
+					"Enable": true,
+					"Crop": {"X": 0, "Y": 0, "W": 999999},
+					"Mask": {"Slope": 0, "Y": 0, "H": 480}
+				},
+				"Yolo": {"Weights": "yolo_best.pt", "Size": 640}
+			}
+		},
+				{
+			"ID": "camera4",
+			"Height": 480, "Width": 640,
+			"Count": {
+				"Device": "cpu",
+				"Mask": {
+					"Enable": true,
+					"Crop": {"X": 0, "Y": 0, "W": 999999},
+					"Mask": {"Slope": 0, "Y": 0, "H": 480}
+				},
+				"Yolo": {"Weights": "yolo_best.pt", "Size": 640}
+			}
+		},
+		{
+			"ID": "camera5",
+			"Height": 480, "Width": 640,
+			"Count": {
+				"Device": "cpu",
+				"Mask": {
+					"Enable": true,
+					"Crop": {"X": 0, "Y": 0, "W": 999999},
+					"Mask": {"Slope": 0, "Y": 0, "H": 480}
+				},
+				"Yolo": {"Weights": "yolo_best.pt", "Size": 640}
+			}
+		},
+		{
+			"ID": "camera6",
+			"Height": 480, "Width": 640,
+			"Count": {
+				"Device": "cpu",
+				"Mask": {
+					"Enable": true,
+					"Crop": {"X": 0, "Y": 0, "W": 999999},
+					"Mask": {"Slope": 0, "Y": 0, "H": 480}
+				},
+				"Yolo": {"Weights": "yolo_best.pt", "Size": 640}
+			}
+		},
+		{
+			"ID": "camera7",
 			"Height": 480, "Width": 640,
 			"Count": {
 				"Device": "cpu",

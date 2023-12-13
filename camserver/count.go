@@ -68,10 +68,12 @@ func (c *Counter) Analyze(ctx context.Context, dst, src string) (CountOutput, er
 	cmd := exec.CommandContext(ctx, "python", c.arg[:]...)
 	stdout, stderr := bytes.NewBuffer(nil), bytes.NewBuffer(nil)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
-	if err := cmd.Run(); err != nil {
-		return CountOutput{}, errors.Wrap(err, "")
-	}
+
+	err := cmd.Run()
 	outB, errB := stdout.Bytes(), stderr.Bytes()
+	if err != nil {
+		return CountOutput{}, errors.Wrap(err, fmt.Sprintf("\"%s\" \"%s\"", outB, errB))
+	}
 
 	resp := struct {
 		Status int

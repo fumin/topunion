@@ -1,12 +1,15 @@
 package util
 
 import (
+	"context"
 	"io"
 	"math/rand"
 	"os"
 	"time"
 
 	"github.com/pkg/errors"
+
+	"camserver/ffmpeg"
 )
 
 const (
@@ -89,4 +92,52 @@ func CopyFile(dstPath, srcPath string) error {
 	defer src.Close()
 	return WriteFile(dstPath, src)
 
+}
+
+func ReadJSONFile(fpath string, v interface{}) error {
+	b, err := os.ReadFile(fpath)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	if err := json.Unmarshal(b, v); err != nil {
+		return errors.Wrap(err, "")
+	}
+	return nil
+}
+
+func ReadVideoDuration(ctx context.Context, r io.Reader) (float64, error) {
+	f, err := os.CreateTemp("", "")
+	if err != nil {
+		return -1, errors.Wrap(err, "")
+	}
+	defer os.Remove(f.Name())
+	if _, err := io.Copy(f, r); err != nil {
+		return -1, errors.Wrap(err, "")
+	}
+	if err := f.Close(); err != nil {
+		return -1, errors.Wrap(err, "")
+	}
+
+	probe, err := ffmpeg.FFProbe(ctx, []string{f.Name()})
+	if err != nil {
+		return -1, errors.Wrap(err, "")
+	}
+	return probe.Format.Duration, nil
+}
+
+func GetDoneTry(root string) (string, error) {
+        retries, err := os.ReadDir(root)
+        if err != nil {
+                return "", errors.Wrap(err, "")
+        }
+        for j := len(retries) - 1; j >= 0; j-- {
+                retry := retries[j]
+
+                donePath := filepath.Join(root, retry.Name(), DoneFilename)
+                if _, err := os.Stat(donePath); err != nil {
+                        continue
+                }
+                return retry.Name(), nil
+        }
+	return "", errors.Errorf("not found")
 }

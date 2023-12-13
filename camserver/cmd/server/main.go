@@ -38,6 +38,14 @@ func readConfig(fpath string) (server.Config, error) {
 	return config, nil
 }
 
+func jsonMarshalMust(cfg server.Config) string {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		log.Fatalf("%+v", err)
+	}
+	return string(b)
+}
+
 func daily(f func() error) {
 	go func() {
 		for {
@@ -69,7 +77,7 @@ func mainWithErr() error {
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
-	log.Printf("%#v", config)
+	log.Printf("%s", jsonMarshalMust(config))
 
 	// https://github.com/mattn/go-sqlite3/issues/209
 	config.SqliteMaxConn = 1
@@ -81,7 +89,7 @@ func mainWithErr() error {
 
 	// Run background jobs.
 	s.DoJobForever()
-	daily(func() error { return server.DeleteOldVideos(s.VideoDir, 10*24*time.Hour) })
+	// daily(func() error { return server.DeleteOldVideos(s.VideoDir, 10*24*time.Hour) })
 
 	// Run HTTP server.
 	idleConnsClosed := make(chan struct{})

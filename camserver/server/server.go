@@ -7,6 +7,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -26,24 +27,101 @@ import (
 
 const (
 	DBFilename = "db.sqlite"
+
+	PathLive = "/Live"
+	PathServe = "/Serve"
 )
+
+type CameraStatus struct {
+        ID        string
+        T    time.Time
+        Live string
+
+	Err string
+}
+
+func getCameraStatus(s *Server, id string) (CameraStatus, error) {
+	camDir := filepath.Join(s.VideoDir, id)
+        day, err := latestDay(camDir)
+        if err != nil {
+		return CameraStatus{}, errors.Wrap(err, "")
+        }
+        dayDir := filepath.Join(camDir, day[0], day[1])
+
+	segs, err := os.ReadDir(dayDir)
+        if err != nil {
+		return CameraStatus{}, errors.Wrap(err, "")
+        }
+	for i := len(segs) - 1; i >= 0; i-- {
+                segDE := segs[i]
+
+                rawDir := filepath.Join(dayDir, segDE.Name(), camserver.RawDir)
+                doneRaw, err := util.GetDoneTry(rawDir)
+                if err != nil {
+                        continue
+                }
+	}
+
+	return status, nil
+}
 
 //go:embed tmpl/status.html
 var statusHTML string
 var statusTmpl = template.Must(template.New("").Parse(statusHTML))
 
 func Status(s *Server, w http.ResponseWriter, r *http.Request) {
-	page, err := s.getStatusPage()
-	if err != nil {
-		http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
-		return
+	camIDs := make([]string, 0, len(s.Camera))
+        for id := range s.Camera {
+                camIDs = append(camIDs, id)
+        }
+        slices.Sort(camIDs)
+
+	type StatusPage struct {
+	        Camera []CameraStatus
 	}
+        var page StatusPage
+        for _, id := range camIDs {
+                c, err := getCameraStatus(id)
+		if err != nil {
+			c.Err = fmt.Sprintf("%+v", err)
+		}
+		page.Camera = append(page.Camera, c)
+	}
+
 	if err := statusTmpl.Execute(w, page); err != nil {
 		log.Printf("%+v", err)
 	}
 }
 
+func Live(s *Server, w http.ResponseWriter, r *http.Request) {
+	cam := r.FormValue("c")
+
+	camDir := filepath.Join(s.VideoDir, cam)
+	day, err := latestDay(camDir)
+        if err != nil {
+		http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
+		return
+        }
+        dayDir := filepath.Join(camDir, day[0], day[1])
+	playlist, err := getPlaylist(dayDir)
+        if err != nil {
+		http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
+		return
+        }
+
+	// Rewrite file path URLs.
+	for i, s := range playlist.Segment {
+		v := url.Values{}
+		v.Set("f", s.URL)
+		playlist.Segment[i].URL = PathServe+"?"+v.Encode()
+	}
+
+	w.Write(playlist.Bytes())
+}
+
 func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	if err := r.ParseMultipartForm(32 * 1024 * 1024); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
@@ -70,6 +148,10 @@ func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
+	vidDur, err := util.ReadVideoDuration(ctx, f)
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return -1, errors.Wrap(err, "")
+	}
 
 	// Save uploaded file.
 	ext := filepath.Ext(fh.Filename)
@@ -92,13 +174,15 @@ func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 		Time:     t,
 	}
 	job := Job{Func: JobProcessVideo, Arg: jobArg}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	if err := SendJob(ctx, s.DB, job); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
 
-	if err := os.WriteFile(filepath.Join(reqDir, util.DoneFilename), []byte{}, os.ModePerm); err != nil {
+	doneB, err := json.Marshal(struct{ Duration float64 }{Duration: vidDur})
+	if err != nil {
+		return nil, errors.Wrap(err, "")
+	}
+	if err := os.WriteFile(filepath.Join(reqDir, util.DoneFilename), doneB, os.ModePerm); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
 
@@ -194,6 +278,11 @@ func Index(s *Server, w http.ResponseWriter, r *http.Request) {
 	if err := indexTmpl.Execute(w, page); err != nil {
 		log.Printf("%+v", err)
 	}
+}
+
+func Serve(s *Server, w http.ResponseWriter, r *http.Request) {
+	fpath := r.FormValue("f")
+	http.ServeFile(w, r, fpath)
 }
 
 func handleFunc(s *Server, httpPath string, fn func(*Server, http.ResponseWriter, *http.Request)) {
@@ -328,7 +417,9 @@ func NewServer(config Config) (*Server, error) {
 	}
 
 	handleFunc(s, "/Status", Status)
+	handleFunc(s, PathLive, Live)
 	handleJSON(s, "/UploadVideo", UploadVideo)
+	handleFunc(s, PathServe, Serve)
 	s.ServeMux.Handle("/static/", http.FileServer(http.FS(staticFS)))
 	handleFunc(s, "/", Index)
 
