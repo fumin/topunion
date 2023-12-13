@@ -95,9 +95,9 @@ EOM
 /usr/local/cuda/bin/nvcc -o saxpy saxpy.cu
 ./saxpy
 
-ETHERNET_IFACE=$(nmcli --terse --fields DEVICE,TYPE dev | grep ethernet | cut -d ":" -f 1)
-ETHERNET_PREFIX=192.168.2
-ETHERNET_IP=${ETHERNET_PREFIX}.1
+# ETHERNET_IFACE=$(nmcli --terse --fields DEVICE,TYPE dev | grep ethernet | cut -d ":" -f 1)
+# ETHERNET_PREFIX=192.168.2
+# ETHERNET_IP=${ETHERNET_PREFIX}.1
 cat > /etc/netplan/01-network-manager-all.yaml <<- EOM
 # Let NetworkManager manage all devices on this system
 network:
@@ -140,23 +140,23 @@ cat > /etc/cron.d/scan_${WIFI_LAN_IFACE} <<- EOM
 @reboot root $SCAN_SCRIPT > /tmp/scan_${WIFI_LAN_IFACE}.txt 2>&1
 EOM
 
-apt install -y isc-dhcp-server
-cat > /etc/dhcp/dhcpd.conf <<- EOM
-default-lease-time 600;
-max-lease-time 7200;
-
-# IP conventions:
-# xxx.xxx.xxx.0:   network
-# xxx.xxx.xxx.1:   router
-# xxx.xxx.xxx.255: broadcast
-subnet ${ETHERNET_PREFIX}.0 netmask 255.255.255.0 {
- range ${ETHERNET_PREFIX}.2 ${ETHERNET_PREFIX}.254;
- option routers ${ETHERNET_IP};
- # option domain-name-servers ${ETHERNET_IP};
- # option domain-name "topunion.com";
-}
-EOM
-systemctl restart isc-dhcp-server.service
+# apt install -y isc-dhcp-server
+# cat > /etc/dhcp/dhcpd.conf <<- EOM
+# default-lease-time 600;
+# max-lease-time 7200;
+# 
+# # IP conventions:
+# # xxx.xxx.xxx.0:   network
+# # xxx.xxx.xxx.1:   router
+# # xxx.xxx.xxx.255: broadcast
+# subnet ${ETHERNET_PREFIX}.0 netmask 255.255.255.0 {
+#  range ${ETHERNET_PREFIX}.2 ${ETHERNET_PREFIX}.254;
+#  option routers ${ETHERNET_IP};
+#  # option domain-name-servers ${ETHERNET_IP};
+#  # option domain-name "topunion.com";
+# }
+# EOM
+# systemctl restart isc-dhcp-server.service
 
 # Confine multicast to loopback.
 IP_SCRIPT=/usr/local/bin/ip_init.sh
