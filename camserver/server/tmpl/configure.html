@@ -1,0 +1,108 @@
+<html>
+<head>
+        <script src="/static/hls.js"></script>
+
+        <script src="/static/util.js"></script>
+</head>
+<body>
+	<h3>{{.ID}} configuration</h3>
+	<pre id="info"></pre>
+
+	<div id="mask-control">
+		<label for="x-input">X</label><input id="x-input" value="{{.Config.Count.Mask.X}}" style="width: 4em; margin-right: 1em;">
+		<label for="y-input">Y</label><input id="y-input" value="{{.Config.Count.Mask.Y}}" style="width: 4em; margin-right: 1em;">
+		<label for="width-input">Width</label><input id="width-input" value="{{.Config.Count.Mask.Width}}" style="width: 4em; margin-right: 1em;">
+		<label for="height-input">Height</label><input id="height-input" value="{{.Config.Count.Mask.Height}}" style="width: 4em; margin-right: 1em;">
+		<label for="shift-input">Shift</label><input id="shift-input" value="{{.Config.Count.Mask.Shift}}" style="width: 4em; margin-right: 1em;">
+		<input id="save-btn" type="submit" value="Save">
+	</div>
+
+	<div style="position: relative;">
+		<video controls muted autoplay style="position: absolute; top: 0; left: 0; max-width: 100%; max-height: 98vh;"></video>
+		<svg viewBox="0 0 {{.Config.Width}} {{.Config.Height}}" style="position: absolute; top: 0; left: 0;">
+			<defs>
+				<mask id="hole">
+					<rect x="0" y="0" width="{{.Config.Width}}" height="{{.Config.Height}}" fill="white"/>
+					<path fill="black"/>
+				</mask>
+			</defs>
+
+			<rect x="0" y="0" width="{{.Config.Width}}" height="{{.Config.Height}}" fill="black" opacity="0.75" mask="url(#hole)"/>
+		</svg>
+	</div>
+
+	<script>
+let page = {{.}};
+
+function getMaskFromInput() {
+	let mask = {};
+	mask.X = parseInt(document.querySelector("#x-input").value);
+	mask.Y = parseInt(document.querySelector("#y-input").value);
+	mask.Width = parseInt(document.querySelector("#width-input").value);
+	mask.Height = parseInt(document.querySelector("#height-input").value);
+	mask.Shift = parseInt(document.querySelector("#shift-input").value);
+	return mask;
+}
+
+function updateMask() {
+	let mask = getMaskFromInput();
+
+	let d = "";
+	d += "M "+mask.X+" "+mask.Y+" ";
+	d += "L "+(mask.X+mask.Width)+" "+(mask.Y+mask.Shift)+" ";
+	d += "L "+(mask.X+mask.Width)+" "+(mask.Y+mask.Shift+mask.Height)+" ";
+	d += "L "+mask.X+" "+(mask.Y+mask.Height)+" ";
+	d += "Z";
+
+	let path = document.querySelector("svg path");
+	path.setAttribute("d", d);
+}
+
+function display(camera) {
+        let video = document.querySelector("video");
+        util.playHLS(video, camera.Live);
+	video.addEventListener("loadeddata", function(ev){
+		let svg = document.querySelector("svg");
+		svg.style.width = video.clientWidth;
+		svg.style.height = video.clientHeight;
+		svg.style["pointer-events"] = "none";
+	});
+
+	let path = document.querySelector("svg path");
+	updateMask();
+}
+
+function setupMaskControls(camera) {
+	let inputs = document.querySelectorAll("#mask-control input");
+	for (let i = 0; i < inputs.length; i++) {
+		let input = inputs[i];
+		input.addEventListener("change", function(ev){
+			updateMask();
+		});
+	}
+
+	let saveBtn = document.querySelector("#save-btn");
+	saveBtn.addEventListener("click", function(ev){
+		let newCam = JSON.parse(JSON.stringify(camera));
+		newCam.Config.Count.Mask = getMaskFromInput();
+
+		let v = new URLSearchParams();
+		v.Set("c", JSON.stringify(newCam));
+		let urlStr = page.SavePath+"?"+v.toString();
+		let loadEnd = function(ev){};
+		let okCallback = function(ev){
+			document.querySelector("#info").textContent = "Saved!";
+		};
+		util.ReqJSON("POST", urlStr, loadEnd, okCallback);
+	});
+}
+
+function main(page) {
+	let camera = page;
+	display(camera);
+	setupMaskControls(camera);
+}
+main(page);
+        </script>
+</body>
+</html>

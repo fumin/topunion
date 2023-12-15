@@ -34,6 +34,10 @@ func mainWithErr() error {
 	if err := os.MkdirAll(*dir, os.ModePerm); err != nil {
 		return errors.Wrap(err, "")
 	}
+	if err := os.WriteFile(filepath.Join(*dir, "config.json"), config.Dev); err != nil {
+		return errors.Wrap(err, "")
+	}
+
 	dbPath := filepath.Join(*dir, server.DBFilename)
 	dbV := url.Values{}
 	dbV.Set("_journal_mode", "WAL")

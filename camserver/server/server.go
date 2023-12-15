@@ -28,9 +28,54 @@ import (
 const (
 	DBFilename = "db.sqlite"
 
+	PathSaveCamera = "/SaveCamera"
 	PathLive  = "/Live"
 	PathServe = "/Serve"
 )
+
+func SaveCamera(s *Server, w http.ResponseWriter, r *http.Request) (interface{}, error) {
+	c := struct{
+		ID string
+		Config CameraConfig
+	}()
+	if err := json.Unmarshal([]byte(r.FormValue("c")), &c); err != nil {
+		return nil, errors.Wrap(err, "")
+	}
+	if err := s.saveCamera(c.ID, c.Config); err != nil {
+		return nil, errors.Wrap(err, "")
+	}
+	return struct{}{}, nil
+}
+
+//go:embed tmpl/configure.html
+var configureHTML string
+var configureTmpl = template.Must(template.New("").Parse(configureHTML))
+
+func Configure(s *Server, w http.ResponseWriter, r *http.Request) {
+	id := r.FormValue("c")
+	camera, ok := s.Camera[id]
+	if !ok {
+		http.Error(w, fmt.Sprintf("not found \"%s\"", id), http.StatusBadRequest)
+		return
+	}
+	status, err := getCameraStatus(s, id)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
+		return
+	}
+
+	page := struct{
+		ID string
+		Config CameraConfig
+		Live string
+		SavePath string
+	}{}
+	page.ID = status.ID
+	page.Config = camera.Config
+	page.Live = status.Live
+	page.SavePath = PathSaveCamera
+	configureTmpl.Execute(w, page)
+}
 
 type CameraStatus struct {
 	ID   string
@@ -363,7 +408,8 @@ type Config struct {
 }
 
 type Server struct {
-	C         Config
+	Dir string
+	C         *persistedConfig
 	StartTime time.Time
 
 	ServeMux *http.ServeMux
@@ -382,25 +428,30 @@ type Server struct {
 //go:embed static
 var staticFS embed.FS
 
-func NewServer(config Config) (*Server, error) {
-	s := &Server{C: config, StartTime: time.Now()}
+func NewServer(dir string) (*Server, error) {
+	s := &Server{Dir: dir, StartTime: time.Now()}
+	var err error
+	s.C, err = config.NewPersistedConfig(filepath.Join(dir, "config.json"))
+	if err != nil {
+		return nil, errors.Wrap(err, "")
+	}
+
 	s.ServeMux = http.NewServeMux()
-	s.Server.Addr = s.C.Addr
+	s.Server.Addr = s.C.Addr()
 	s.Server.Handler = s.ServeMux
 
-	s.ScriptDir = filepath.Join(s.C.Dir, "script")
-	var err error
+	s.ScriptDir = filepath.Join(s.Dir, "script")
 	s.Scripts, err = camserver.NewScripts(s.ScriptDir)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
 
-	s.BackgroundProcessDir = filepath.Join(s.C.Dir, "proc")
+	s.BackgroundProcessDir = filepath.Join(s.Dir, "proc")
 	if err := os.MkdirAll(s.BackgroundProcessDir, os.ModePerm); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
 
-	dbPath := filepath.Join(s.C.Dir, DBFilename)
+	dbPath := filepath.Join(s.Dir, DBFilename)
 	dbV := url.Values{}
 	dbV.Set("_journal_mode", "WAL")
 	// https://github.com/mattn/go-sqlite3/issues/209
@@ -409,11 +460,10 @@ func NewServer(config Config) (*Server, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
-	if s.C.SqliteMaxConn != 0 {
-		s.DB.SetMaxOpenConns(s.C.SqliteMaxConn)
-	}
+	// https://github.com/mattn/go-sqlite3/issues/209
+	s.DB.SetMaxOpenConns(1)
 
-	s.VideoDir = filepath.Join(s.C.Dir, "video")
+	s.VideoDir = filepath.Join(s.Dir, "video")
 	if err := os.MkdirAll(s.VideoDir, os.ModePerm); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
@@ -437,6 +487,8 @@ func NewServer(config Config) (*Server, error) {
 		s.Camera[cam.Config.ID] = cam
 	}
 
+	handleFunc(s, "/Configure", Configure)
+	handleJSON(s, PathSaveCamera, SaveCamera)
 	handleFunc(s, "/Status", Status)
 	handleFunc(s, PathLive, Live)
 	handleJSON(s, "/UploadVideo", UploadVideo)

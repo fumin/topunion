@@ -16,27 +16,8 @@ import (
 )
 
 var (
-	configPath = flag.String("c", "server/config/dev.json", "configuration path")
+	dir = flag.String("d", "devData", "data directory")
 )
-
-func readConfig(fpath string) (server.Config, error) {
-	b, err := os.ReadFile(fpath)
-	if err != nil {
-		return server.Config{}, errors.Wrap(err, "")
-	}
-	var config server.Config
-	if err := json.Unmarshal(b, &config); err != nil {
-		return server.Config{}, errors.Wrap(err, "")
-	}
-
-	if config.Name == "dev" && cuda.IsAvailable() {
-		for i := range config.Camera {
-			config.Camera[i].Count.Device = "cuda:0"
-		}
-	}
-
-	return config, nil
-}
 
 func jsonMarshalMust(cfg server.Config) string {
 	b, err := json.Marshal(cfg)
@@ -73,15 +54,7 @@ func main() {
 }
 
 func mainWithErr() error {
-	config, err := readConfig(*configPath)
-	if err != nil {
-		return errors.Wrap(err, "")
-	}
-	log.Printf("%s", jsonMarshalMust(config))
-
-	// https://github.com/mattn/go-sqlite3/issues/209
-	config.SqliteMaxConn = 1
-	s, err := server.NewServer(config)
+	s, err := server.NewServer(*dir)
 	if err != nil {
 		return errors.Wrap(err, "")
 	}

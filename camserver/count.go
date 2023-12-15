@@ -25,16 +25,11 @@ type CountConfig struct {
 	Device string
 	Mask   struct {
 		Enable bool
-		Crop   struct {
-			X int
-			Y int
-			W int
-		}
-		Mask struct {
-			Slope int
-			Y     int
-			H     int
-		}
+		X int
+		Y int
+		Width int
+		Height int
+		Shift int
 	}
 	Yolo struct {
 		Weights string

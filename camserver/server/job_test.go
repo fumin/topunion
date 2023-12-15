@@ -178,10 +178,12 @@ func newServer(t *testing.T) *Server {
 	}
 
 	cfg := Config{
-		Dir:  dir,
 		Addr: "localhost:0",
 	}
-	s, err := NewServer(cfg)
+	if err := util.WriteJSONFile(filepath.Join(dir, "config.json"), cfg); err != nil {
+		t.Fatalf("%+v", err)
+	}
+	s, err := NewServer(dir)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}

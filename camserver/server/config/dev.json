@@ -1,6 +1,5 @@
 {
 	"Name": "dev",
-	"Dir": "devData",
 	"Addr": ":8080",
 	"Camera": [
 		{
@@ -8,102 +7,63 @@
 			"Height": 480, "Width": 640,
 			"Count": {
 				"Device": "cpu",
-				"Mask": {
-					"Enable": true,
-					"Crop": {"X": 0, "Y": 0, "W": 999999},
-					"Mask": {"Slope": 0, "Y": 0, "H": 480}
-				},
+				"Mask": {"Enable":true,"X":0,"Y":160,"Width":640,"Height":70,"Shift":-5},
 				"Yolo": {"Weights": "yolo_best.pt", "Size": 640}
 			}
-		},
-		{
+		},{
 			"ID": "camera1",
 			"Height": 480, "Width": 720,
 			"Count": {
 				"Device": "cpu",
-				"Mask": {
-					"Enable": true,
-					"Crop": {"X": 0, "Y": 0, "W": 999999},
-					"Mask": {"Slope": 0, "Y": 0, "H": 480}
-				},
+				"Mask": {"Enable":true,"X":0,"Y":0,"Width":720,"Height":480,"Shift":0},
 				"Yolo": {"Weights": "yolo_best.pt", "Size": 640}
 			}
-		},
-		{
+		},{
 			"ID": "camera2",
 			"Height": 480, "Width": 640,
 			"Count": {
 				"Device": "cpu",
-				"Mask": {
-					"Enable": true,
-					"Crop": {"X": 0, "Y": 0, "W": 999999},
-					"Mask": {"Slope": 0, "Y": 0, "H": 480}
-				},
+				"Mask": {"Enable":true,"X":0,"Y":0,"Width":640,"Height":480,"Shift":0},
 				"Yolo": {"Weights": "yolo_best.pt", "Size": 640}
 			}
-		},
-		{
+		},{
 			"ID": "camera3",
 			"Height": 480, "Width": 640,
 			"Count": {
 				"Device": "cpu",
-				"Mask": {
-					"Enable": true,
-					"Crop": {"X": 0, "Y": 0, "W": 999999},
-					"Mask": {"Slope": 0, "Y": 0, "H": 480}
-				},
+				"Mask": {"Enable":true,"X":0,"Y":0,"Width":640,"Height":480,"Shift":0},
 				"Yolo": {"Weights": "yolo_best.pt", "Size": 640}
 			}
-		},
-				{
+		},{
 			"ID": "camera4",
 			"Height": 480, "Width": 640,
 			"Count": {
 				"Device": "cpu",
-				"Mask": {
-					"Enable": true,
-					"Crop": {"X": 0, "Y": 0, "W": 999999},
-					"Mask": {"Slope": 0, "Y": 0, "H": 480}
-				},
+				"Mask": {"Enable":true,"X":0,"Y":0,"Width":640,"Height":480,"Shift":0},
 				"Yolo": {"Weights": "yolo_best.pt", "Size": 640}
 			}
-		},
-		{
+		},{
 			"ID": "camera5",
 			"Height": 480, "Width": 640,
 			"Count": {
 				"Device": "cpu",
-				"Mask": {
-					"Enable": true,
-					"Crop": {"X": 0, "Y": 0, "W": 999999},
-					"Mask": {"Slope": 0, "Y": 0, "H": 480}
-				},
+				"Mask": {"Enable":true,"X":0,"Y":0,"Width":640,"Height":480,"Shift":0},
 				"Yolo": {"Weights": "yolo_best.pt", "Size": 640}
 			}
-		},
-		{
+		},{
 			"ID": "camera6",
 			"Height": 480, "Width": 640,
 			"Count": {
 				"Device": "cpu",
-				"Mask": {
-					"Enable": true,
-					"Crop": {"X": 0, "Y": 0, "W": 999999},
-					"Mask": {"Slope": 0, "Y": 0, "H": 480}
-				},
+				"Mask": {"Enable":true,"X":0,"Y":0,"Width":640,"Height":480,"Shift":0},
 				"Yolo": {"Weights": "yolo_best.pt", "Size": 640}
 			}
-		},
-		{
+		},{
 			"ID": "camera7",
 			"Height": 480, "Width": 640,
 			"Count": {
 				"Device": "cpu",
-				"Mask": {
-					"Enable": true,
-					"Crop": {"X": 0, "Y": 0, "W": 999999},
-					"Mask": {"Slope": 0, "Y": 0, "H": 480}
-				},
+				"Mask": {"Enable":true,"X":0,"Y":0,"Width":640,"Height":480,"Shift":0},
 				"Yolo": {"Weights": "yolo_best.pt", "Size": 640}
 			}
 		}

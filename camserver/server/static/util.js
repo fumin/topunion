@@ -1,6 +1,66 @@
 let util = {};
 
-util.playHLS = function(videoElement, src) {
+util.TimeFormat = function(d) {
+  var dtStr = `${d.getFullYear()}-${(d.getMonth()+1).toString().padStart(2, "0")}-${d.getDate().toString().padStart(2, "0")} ${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}`
+  return dtStr;
+}
+
+util.Base64URLSafe = function(s) {
+  let res = btoa(unescape(encodeURIComponent(s)));
+  res = res.replaceAll("+", "-");
+  res = res.replaceAll("/", "_");
+  res = res.replaceAll("=", "");
+  return res;
+}
+
+let infoElement = document.querySelector("#info");
+util.ReqJSON = function(method, urlStr, loadEnd, okCallback) {
+        let req = new XMLHttpRequest();
+        req.addEventListener("loadend", function(ev){
+                loadEnd(ev);
+        });
+        req.addEventListener("error", function(ev){
+                infoElement.textContent = "http error";
+        });
+        req.addEventListener("load", function(ev){
+                let resp = JSON.parse(ev.target.responseText);
+                if (resp.Error) {
+                        infoElement.textContent = resp.Error.Msg;
+                        return;
+                }
+                okCallback(resp);
+        });
+        req.open(method, urlStr);
+        req.send();
+}
+
+util.ReqSSE = function(urlStr, okCallback, errCallback) {
+  var evtSrc = new EventSource(urlStr);
+  evtSrc.addEventListener("error", function(ev){
+    evtSrc.close();
+    let logDiv = document.createElement("div");
+    logDiv.textContent = `event source error: `+ev.target.url;
+    infoElement.appendChild(logDiv);
+  });
+  evtSrc.addEventListener("message", function(ev){
+    let data = JSON.parse(ev.data);
+    if (data.Resp) {
+      if (data.Resp.Error) {
+        errCallback(data.Resp.Error);
+      } else {
+        okCallback(data.Resp.Resp);
+      }
+      evtSrc.close();
+      return;
+    }
+
+    let logDiv = document.createElement("div");
+    logDiv.textContent = data.Progress;
+    infoElement.insertBefore(logDiv, infoElement.firstChild);
+  })
+}
+
+util.PlayHLS = function(videoElement, src) {
 	if (Hls.isSupported()) {
                 let config = {
                         liveSyncDurationCount: 1,
@@ -38,7 +98,7 @@ util.playHLS = function(videoElement, src) {
         }
 };
 
-util.playMPEGTS = function(videoElement, urlStr) {
+util.PlayMPEGTS = function(videoElement, urlStr) {
 	if (mpegts.getFeatureList().mseLivePlayback) {
 		let player = mpegts.createPlayer({
 			type: "mpegts",

@@ -107,6 +107,17 @@ func ReadJSONFile(fpath string, v interface{}) error {
 	return nil
 }
 
+func WriteJSONFile(fpath string, v interface{}) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	if err := os.WriteFile(fpath, b, os.ModePerm); err != nil {
+		return errors.Wrap(err, "")
+	}
+	return nil
+}
+
 func ReadVideoDuration(ctx context.Context, r io.Reader) (float64, error) {
 	f, err := os.CreateTemp("", "")
 	if err != nil {

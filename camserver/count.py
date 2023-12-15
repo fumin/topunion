@@ -1,5 +1,5 @@
 # Example usage:
-# python count.py -c='{"Height": 480, "Width": 640, "Device": "cuda:0", "Mask": {"Enable": true, "Crop": {"X": 0, "Y": 0, "W": 999999}, "Mask": {"Slope": 5, "Y": 160, "H": 70}}, "Yolo": {"Weights": "yolo_best.pt", "Size": 640}}'
+# python count.py -dst=out.ts -src=testing/shilin20230826_sd.mp4 -c='{"Height": 480, "Width": 640, "Device": "cuda:0", "Mask": {"Enable": true, "X": 0, "Y": 160, "Width": 640,"Height": 70, "Shift": 5}, "Yolo": {"Weights": "yolo_best.pt", "Size": 640}}'
 
 import argparse
 import datetime
@@ -126,7 +126,7 @@ class AIOutput:
 class AI:
     def __init__(self, cfg):
         self.cfg = cfg
-        self.masker = Masker(cfg["Mask"], cfg["Height"], cfg["Width"], cfg["Device"])
+        self.masker = newMasker(cfg["Mask"], cfg["Height"], cfg["Width"], cfg["Yolo"]["Size"], cfg["Device"])
         # Initialize Yolo.
         numChannels = 3
         img = torch.from_numpy(np.zeros([cfg["Height"], cfg["Width"], numChannels], dtype=np.uint8)).to(cfg["Device"])
@@ -252,31 +252,14 @@ class Tracker:
 
 
 class Masker:
-    def __init__(self, config, imgH, imgW, device):
-        self.config = config
-        if not config["Enable"]:
-            return
-
-        self.x1 = config["Crop"]["X"]
-        self.y1 = config["Crop"]["Y"]
-        self.x2 = self.x1 + config["Crop"]["W"]
-        if self.x2 > imgW:
-            self.x2 = imgW
-        self.y2 = self.y1 + config["Crop"]["W"]
-        if self.y2 > imgH:
-            self.y2 = imgH
-
-        croppedH, croppedW = self.y2-self.y1, self.x2 - self.x1
-        numChannels = 3
-        mask = np.zeros([croppedH, croppedW, numChannels], dtype=np.uint8)
-        slope = config["Mask"]["Slope"] / croppedW
-        for x in range(croppedW):
-            yS = config["Mask"]["Y"] + int(x*slope)
-            yE = yS + config["Mask"]["H"]
-            mask[yS:yE, x] = 1
-        self.mask = torch.from_numpy(mask).to(device)
-
-        self.vizMask = torch.clip(self.mask.float() + 0.25, 0, 1)
+    def __init__(self):
+        self.config = {}
+        self.x1 = -1
+        self.y1 = -1
+        self.x2 = -1
+        self.y2 = -1
+        self.mask = None
+        self.vizMask = None
 
     def run(self, img):
         if not self.config["Enable"]:
@@ -286,6 +269,40 @@ class Masker:
         masked = cropped * self.mask
         maskedViz = (cropped.float() * self.vizMask).to(torch.uint8)
         return cropped, masked, maskedViz
+
+
+def newMasker(config, imgH, imgW, minW, device):
+    m = Masker()
+    m.config = config
+
+    h = config["Height"] + abs(config["Shift"])
+    w = int(max(config["Width"], h, minW))
+    centerX = int(config["X"] + config["Width"]/2)
+    centerY = int(config["Y"] + min(0, config["Shift"]) + h/2)
+
+    m.x1 = centerX - int(w/2)
+    m.y1 = centerY - int(w/2)
+    m.x2 = m.x1 + w
+    m.y2 = m.y1 + w
+
+    m.x1 = min(max(m.x1, 0), imgW)
+    m.y1 = min(max(m.y1, 0), imgH)
+    m.x2 = min(max(m.x2, 0), imgW)
+    m.y2 = min(max(m.y2, 0), imgH)
+
+    croppedH, croppedW = m.y2-m.y1, m.x2-m.x1
+    numChannels = 3
+    mask = np.zeros([croppedH, croppedW, numChannels], dtype=np.uint8)
+    slope = config["Shift"] / croppedW
+    for x in range(croppedW):
+        yS = config["Y"] + int(x*slope)
+        yE = yS + config["Height"]
+        mask[yS:yE, x] = 1
+    m.mask = torch.from_numpy(mask).to(device)
+
+    m.vizMask = torch.clip(m.mask.float() + 0.25, 0, 1)
+
+    return m
 
 
 class Yolo:
