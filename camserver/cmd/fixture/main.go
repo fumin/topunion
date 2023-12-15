@@ -15,6 +15,7 @@ import (
 
 	"camserver"
 	"camserver/server"
+	"camserver/server/config"
 )
 
 var (
@@ -34,7 +35,7 @@ func mainWithErr() error {
 	if err := os.MkdirAll(*dir, os.ModePerm); err != nil {
 		return errors.Wrap(err, "")
 	}
-	if err := os.WriteFile(filepath.Join(*dir, "config.json"), config.Dev); err != nil {
+	if err := os.WriteFile(filepath.Join(*dir, "config.json"), config.Dev, os.ModePerm); err != nil {
 		return errors.Wrap(err, "")
 	}
 

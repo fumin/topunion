@@ -89,7 +89,7 @@ func mainWithErr() error {
 	for {
 		startT := time.Now()
 		if err := uploadVideo(startT); err != nil {
-			return errors.Wrap(err, "")
+			log.Printf("%+v", err)
 		}
 		<-time.After(startT.Add(10 * time.Second).Sub(time.Now()))
 	}

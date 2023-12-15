@@ -13,17 +13,11 @@ func TestCounter(t *testing.T) {
 	defer env.close()
 
 	cfg := shilinSDConfig()
-	counter, err := NewCounter(env.scripts.Count, cfg)
-	if err != nil {
-		t.Fatalf("%+v", err)
-	}
-	defer counter.Close()
-
 	dst := filepath.Join(env.dir, "dst.ts")
 	src := filepath.Join("testing", "shilin20230826_sd.mp4")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	out, err := counter.Analyze(ctx, dst, src)
+	out, err := runCount(ctx, env.scripts.Count, dst, src, cfg)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}

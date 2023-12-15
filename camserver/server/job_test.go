@@ -1,16 +1,20 @@
 package server
 
 import (
-	"camserver"
+	"camserver/util"
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/pkg/errors"
+
+	"camserver"
+	"camserver/server/config"
 )
 
 func TestJobSuccess(t *testing.T) {
@@ -177,7 +181,7 @@ func newServer(t *testing.T) *Server {
 		t.Fatalf("%+v", err)
 	}
 
-	cfg := Config{
+	cfg := config.Config{
 		Addr: "localhost:0",
 	}
 	if err := util.WriteJSONFile(filepath.Join(dir, "config.json"), cfg); err != nil {
@@ -199,5 +203,5 @@ func newServer(t *testing.T) *Server {
 
 func closeServer(s *Server) {
 	s.Close()
-	os.RemoveAll(s.C.Dir)
+	os.RemoveAll(s.Dir)
 }

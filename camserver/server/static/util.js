@@ -83,7 +83,7 @@ util.PlayHLS = function(videoElement, src) {
 
                                         let secs = 5;
                                         setTimeout(function(){
-						util.playHLS(videoElement, src);
+						util.PlayHLS(videoElement, src);
                                         }, secs*1000);
                                 }
 			}

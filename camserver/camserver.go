@@ -101,7 +101,7 @@ type ProcessVideoInput struct {
 	Time     time.Time
 }
 
-func ProcessVideo(ctx context.Context, db *sql.DB, counter *Counter, arg ProcessVideoInput) error {
+func ProcessVideo(ctx context.Context, db *sql.DB, scripts Scripts, countCfg CountConfig, arg ProcessVideoInput) error {
 	dir := filepath.Join(arg.Dir, ProcessVideoDir, util.RunID())
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
 		return errors.Wrap(err, "")
@@ -113,7 +113,7 @@ func ProcessVideo(ctx context.Context, db *sql.DB, counter *Counter, arg Process
 	}
 
 	countPath := filepath.Join(dir, CountVideoFilename)
-	countOut, err := counter.Analyze(ctx, countPath, arg.Filepath)
+	countOut, err := runCount(ctx, scripts.Count, countPath, arg.Filepath, countCfg)
 	if err != nil {
 		return errors.Wrap(err, "")
 	}

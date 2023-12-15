@@ -22,6 +22,7 @@ import (
 	"github.com/pkg/errors"
 
 	"camserver"
+	"camserver/server/config"
 	"camserver/util"
 )
 
@@ -29,19 +30,20 @@ const (
 	DBFilename = "db.sqlite"
 
 	PathSaveCamera = "/SaveCamera"
-	PathLive  = "/Live"
-	PathServe = "/Serve"
+	PathConfigure  = "/Configure"
+	PathLive       = "/Live"
+	PathServe      = "/Serve"
 )
 
 func SaveCamera(s *Server, w http.ResponseWriter, r *http.Request) (interface{}, error) {
-	c := struct{
-		ID string
-		Config CameraConfig
-	}()
+	c := struct {
+		ID     string
+		Config config.CameraConfig
+	}{}
 	if err := json.Unmarshal([]byte(r.FormValue("c")), &c); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
-	if err := s.saveCamera(c.ID, c.Config); err != nil {
+	if err := s.C.SetCamera(c.ID, c.Config); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
 	return struct{}{}, nil
@@ -53,7 +55,7 @@ var configureTmpl = template.Must(template.New("").Parse(configureHTML))
 
 func Configure(s *Server, w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("c")
-	camera, ok := s.Camera[id]
+	camera, ok := s.C.GetCamera(id)
 	if !ok {
 		http.Error(w, fmt.Sprintf("not found \"%s\"", id), http.StatusBadRequest)
 		return
@@ -64,23 +66,25 @@ func Configure(s *Server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	page := struct{
-		ID string
-		Config CameraConfig
-		Live string
+	page := struct {
+		ID       string
+		Config   config.CameraConfig
+		LiveRaw  string
 		SavePath string
 	}{}
 	page.ID = status.ID
-	page.Config = camera.Config
-	page.Live = status.Live
+	page.Config = camera
+	page.LiveRaw = status.LiveRaw
 	page.SavePath = PathSaveCamera
 	configureTmpl.Execute(w, page)
 }
 
 type CameraStatus struct {
-	ID   string
-	T    time.Time
-	Live string
+	ID            string
+	T             time.Time
+	LiveRaw       string
+	LiveCount     string
+	ConfigureLink string
 
 	Err string
 }
@@ -116,9 +120,11 @@ func getCameraStatus(s *Server, id string) (CameraStatus, error) {
 		return CameraStatus{}, errors.Errorf("not found %#v", day)
 	}
 	status := CameraStatus{
-		ID:   id,
-		T:    t.In(util.TaipeiTZ),
-		Live: PathLive + "?" + url.Values{"c": {id}}.Encode(),
+		ID:            id,
+		T:             t.In(util.TaipeiTZ),
+		LiveRaw:       PathLive + "?" + url.Values{"c": {id}, "fn": {camserver.RawMPEGTSFilename}}.Encode(),
+		LiveCount:     PathLive + "?" + url.Values{"c": {id}, "fn": {camserver.CountVideoFilename}}.Encode(),
+		ConfigureLink: PathConfigure + "?" + url.Values{"c": {id}}.Encode(),
 	}
 	return status, nil
 }
@@ -128,12 +134,7 @@ var statusHTML string
 var statusTmpl = template.Must(template.New("").Parse(statusHTML))
 
 func Status(s *Server, w http.ResponseWriter, r *http.Request) {
-	camIDs := make([]string, 0, len(s.Camera))
-	for id := range s.Camera {
-		camIDs = append(camIDs, id)
-	}
-	slices.Sort(camIDs)
-
+	camIDs := s.C.CameraIDs()
 	type StatusPage struct {
 		Camera []CameraStatus
 	}
@@ -162,7 +163,7 @@ func Live(s *Server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dayDir := filepath.Join(camDir, day[0], day[1])
-	playlist, err := getPlaylist(dayDir)
+	playlist, err := getPlaylist(dayDir, r.FormValue("fn"))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
 		return
@@ -191,7 +192,7 @@ func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	if cam == "" {
 		return nil, errors.Errorf("empty camera ID")
 	}
-	if _, ok := s.Camera[cam]; !ok {
+	if _, ok := s.C.GetCamera(cam); !ok {
 		return nil, errors.Errorf("unknown camera")
 	}
 
@@ -381,35 +382,9 @@ func handleJSON(s *Server, httpPath string, fn func(*Server, http.ResponseWriter
 	s.ServeMux.HandleFunc(httpPath, handler)
 }
 
-type CameraConfig struct {
-	ID     string
-	Height int
-	Width  int
-	Count  camserver.CountConfig
-}
-
-type Camera struct {
-	Config  CameraConfig
-	Counter *camserver.Counter
-}
-
-type Config struct {
-	Name string
-	// Directory to store data.
-	Dir string
-	// Address to listen to.
-	Addr string
-
-	Camera []CameraConfig
-
-	// Suppport setting database max connections to alleviate sqlite issue:
-	// https://github.com/mattn/go-sqlite3/issues/209
-	SqliteMaxConn int
-}
-
 type Server struct {
-	Dir string
-	C         *persistedConfig
+	Dir       string
+	C         *config.PersistedConfig
 	StartTime time.Time
 
 	ServeMux *http.ServeMux
@@ -421,8 +396,6 @@ type Server struct {
 	BackgroundProcessDir string
 	DB                   *sql.DB
 	VideoDir             string
-
-	Camera map[string]Camera
 }
 
 //go:embed static
@@ -461,33 +434,16 @@ func NewServer(dir string) (*Server, error) {
 		return nil, errors.Wrap(err, "")
 	}
 	// https://github.com/mattn/go-sqlite3/issues/209
-	s.DB.SetMaxOpenConns(1)
+	if s.C.SqliteMaxOpenConns() > 0 {
+		s.DB.SetMaxOpenConns(s.C.SqliteMaxOpenConns())
+	}
 
 	s.VideoDir = filepath.Join(s.Dir, "video")
 	if err := os.MkdirAll(s.VideoDir, os.ModePerm); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
 
-	s.Camera = make(map[string]Camera)
-	for _, camCfg := range s.C.Camera {
-		if err := util.IsAlphaNumeric(camCfg.ID); err != nil {
-			return nil, errors.Wrap(err, fmt.Sprintf("\"%s\" %#v", camCfg.ID, camCfg))
-		}
-		if _, ok := s.Camera[camCfg.ID]; ok {
-			return nil, errors.Errorf("duplicate camera \"%s\" %#v", camCfg.ID, camCfg)
-		}
-		cam := Camera{Config: camCfg}
-
-		camCfg.Count.Height = camCfg.Height
-		camCfg.Count.Width = camCfg.Width
-		cam.Counter, err = camserver.NewCounter(s.Scripts.Count, camCfg.Count)
-		if err != nil {
-			return nil, errors.Wrap(err, "")
-		}
-		s.Camera[cam.Config.ID] = cam
-	}
-
-	handleFunc(s, "/Configure", Configure)
+	handleFunc(s, PathConfigure, Configure)
 	handleJSON(s, PathSaveCamera, SaveCamera)
 	handleFunc(s, "/Status", Status)
 	handleFunc(s, PathLive, Live)

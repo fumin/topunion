@@ -21,13 +21,6 @@ func TestProcessVideo(t *testing.T) {
 	env := newEnvironment(t)
 	defer env.close()
 
-	cfg := shilinSDConfig()
-	counter, err := NewCounter(env.scripts.Count, cfg)
-	if err != nil {
-		t.Fatalf("%+v", err)
-	}
-	defer counter.Close()
-
 	testVid := filepath.Join(env.dir, "test.mp4")
 	if err := util.CopyFile(testVid, filepath.Join("testing", "shilin20230826_sd.mp4")); err != nil {
 		t.Fatalf("%+v", err)
@@ -39,9 +32,10 @@ func TestProcessVideo(t *testing.T) {
 		Filepath: testVid,
 		Time:     time.Date(2023, time.December, 2, 1, 43, 22, 0, util.TaipeiTZ),
 	}
+	cfg := shilinSDConfig()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	if err := ProcessVideo(ctx, env.db, counter, arg); err != nil {
+	if err := ProcessVideo(ctx, env.db, env.scripts, cfg, arg); err != nil {
 		t.Fatalf("%+v", err)
 	}
 
@@ -89,10 +83,11 @@ func shilinSDConfig() CountConfig {
 	}
 	cfg := CountConfig{Height: 480, Width: 640, Device: device}
 	cfg.Mask.Enable = true
-	cfg.Mask.Crop.W = 999999
-	cfg.Mask.Mask.Slope = 5
-	cfg.Mask.Mask.Y = 160
-	cfg.Mask.Mask.H = 70
+	cfg.Mask.X = 0
+	cfg.Mask.Y = 160
+	cfg.Mask.Width = 640
+	cfg.Mask.Height = 70
+	cfg.Mask.Shift = 5
 	cfg.Yolo.Weights = "yolo_best.pt"
 	cfg.Yolo.Size = 640
 	return cfg

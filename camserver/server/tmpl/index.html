@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html>
 <head>
+	<script src="/static/util.js"></script>
+
 	<style>
 body {
 	font-size: 4vw;
@@ -25,6 +27,7 @@ table, th, td {
 <h1><img src="/static/logo.jpg" style="vertical-align: bottom; height: 1.5em;">Topunion EMS</h1>
 <pre id="info"></pre>
 
+<div id="refresh-info"></div>
 <table id="tb">
 	<thead><tr>
 		<th>Time</th>
@@ -50,6 +53,15 @@ table, th, td {
 <script>
 let page = {{.}};
 
+function main() {
+	let refreshDiv = document.querySelector("#refresh-info");
+	refreshDiv.textContent = "Data at "+util.TimeFormat(new Date());
+	setTimeout(function(){
+		window.location.reload();
+	}, 10*1000);
+}
+
+main();
 </script>
 </body>
 </html>

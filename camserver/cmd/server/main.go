@@ -1,10 +1,8 @@
 package main
 
 import (
-	"camserver/cuda"
 	"camserver/server"
 	"context"
-	"encoding/json"
 	"flag"
 	"log"
 	"net/http"
@@ -18,14 +16,6 @@ import (
 var (
 	dir = flag.String("d", "devData", "data directory")
 )
-
-func jsonMarshalMust(cfg server.Config) string {
-	b, err := json.Marshal(cfg)
-	if err != nil {
-		log.Fatalf("%+v", err)
-	}
-	return string(b)
-}
 
 func daily(f func() error) {
 	go func() {

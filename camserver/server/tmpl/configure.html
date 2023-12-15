@@ -18,7 +18,7 @@
 	</div>
 
 	<div style="position: relative;">
-		<video controls muted autoplay style="position: absolute; top: 0; left: 0; max-width: 100%; max-height: 98vh;"></video>
+		<video controls muted autoplay style="position: absolute; top: 0; left: 0; max-width: 100%; max-height: 90vh;"></video>
 		<svg viewBox="0 0 {{.Config.Width}} {{.Config.Height}}" style="position: absolute; top: 0; left: 0;">
 			<defs>
 				<mask id="hole">
@@ -36,6 +36,7 @@ let page = {{.}};
 
 function getMaskFromInput() {
 	let mask = {};
+	mask.Enable = true;
 	mask.X = parseInt(document.querySelector("#x-input").value);
 	mask.Y = parseInt(document.querySelector("#y-input").value);
 	mask.Width = parseInt(document.querySelector("#width-input").value);
@@ -60,7 +61,7 @@ function updateMask() {
 
 function display(camera) {
         let video = document.querySelector("video");
-        util.playHLS(video, camera.Live);
+        util.PlayHLS(video, camera.LiveRaw);
 	video.addEventListener("loadeddata", function(ev){
 		let svg = document.querySelector("svg");
 		svg.style.width = video.clientWidth;
@@ -87,7 +88,7 @@ function setupMaskControls(camera) {
 		newCam.Config.Count.Mask = getMaskFromInput();
 
 		let v = new URLSearchParams();
-		v.Set("c", JSON.stringify(newCam));
+		v.set("c", JSON.stringify(newCam));
 		let urlStr = page.SavePath+"?"+v.toString();
 		let loadEnd = function(ev){};
 		let okCallback = function(ev){

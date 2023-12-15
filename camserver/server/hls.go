@@ -13,7 +13,7 @@ import (
 	"camserver/util"
 )
 
-func getPlaylist(root string) (hls.Playlist, error) {
+func getPlaylist(root, filename string) (hls.Playlist, error) {
 	segs, err := os.ReadDir(root)
 	if err != nil {
 		return hls.Playlist{}, errors.Wrap(err, "")
@@ -43,7 +43,7 @@ func getPlaylist(root string) (hls.Playlist, error) {
 		if err := util.ReadJSONFile(rawDone, &seg); err != nil {
 			continue
 		}
-		seg.URL = path.Join(pvDir, doneProcess, camserver.CountVideoFilename)
+		seg.URL = path.Join(pvDir, doneProcess, filename)
 
 		pl.MediaSequence = i
 		pl.Segment = append(pl.Segment, seg)

@@ -11,6 +11,8 @@
 		<div id="{{.ID}}">
 			<h3>{{.ID}}</h3>
 			<div>{{.T}}</div>
+			<a href="{{.ConfigureLink}}">Configure camera</a>
+			<br>
 			<video controls muted autoplay style="max-width: 100%; max-height: 98vh;"></video>
 			<!--
 			<pre>{{.Err}}</pre>
@@ -27,7 +29,7 @@ function display(cam) {
 		return;
 	}
 	let video = document.querySelector("#"+cam.ID+" video");
-	util.playHLS(video, cam.Live);
+	util.PlayHLS(video, cam.LiveCount);
 }
 
 function main(page) {

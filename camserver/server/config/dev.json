@@ -67,5 +67,6 @@
 				"Yolo": {"Weights": "yolo_best.pt", "Size": 640}
 			}
 		}
-	]
+	],
+	"SqliteMaxOpenConns": 1
 }

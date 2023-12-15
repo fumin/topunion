@@ -112,11 +112,11 @@ func (s *Server) dispatchJob(jr *jobRun) error {
 		jr.job.Arg = arg
 		jr.duration = 5 * time.Minute
 		jr.fn = func(ctx context.Context) error {
-			cam, ok := s.Camera[arg.Camera]
+			c, ok := s.C.GetCamera(arg.Camera)
 			if !ok {
 				return errors.Wrap(err, fmt.Sprintf("unknown camera \"%s\"", arg.Camera))
 			}
-			return camserver.ProcessVideo(ctx, s.DB, cam.Counter, arg)
+			return camserver.ProcessVideo(ctx, s.DB, s.Scripts, c.Count, arg)
 		}
 	default:
 		return unknownJobError{fn: jb.Func, id: jr.id, b: jr.b}
