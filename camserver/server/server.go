@@ -54,6 +54,9 @@ var configureHTML string
 var configureTmpl = template.Must(template.New("").Parse(configureHTML))
 
 func Configure(s *Server, w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	id := r.FormValue("c")
 	camera, ok := s.C.GetCamera(id)
 	if !ok {
@@ -61,6 +64,11 @@ func Configure(s *Server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status, err := getCameraStatus(s, id)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
+		return
+	}
+	camera.Height, camera.Width, err = util.GetVideoSize(ctx, status.RawPath)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
 		return
@@ -80,8 +88,10 @@ func Configure(s *Server, w http.ResponseWriter, r *http.Request) {
 }
 
 type CameraStatus struct {
-	ID            string
-	T             time.Time
+	ID      string
+	T       time.Time
+	RawPath string
+
 	LiveRaw       string
 	LiveCount     string
 	ConfigureLink string
@@ -98,6 +108,7 @@ func getCameraStatus(s *Server, id string) (CameraStatus, error) {
 	dayDir := filepath.Join(camDir, day[0], day[1])
 
 	var t *time.Time
+	var rawPath string
 	segs, err := os.ReadDir(dayDir)
 	if err != nil {
 		return CameraStatus{}, errors.Wrap(err, "")
@@ -105,7 +116,8 @@ func getCameraStatus(s *Server, id string) (CameraStatus, error) {
 	for i := len(segs) - 1; i >= 0; i-- {
 		segDE := segs[i]
 
-		rawDir := filepath.Join(dayDir, segDE.Name(), camserver.RawDir)
+		segDir := filepath.Join(dayDir, segDE.Name())
+		rawDir := filepath.Join(segDir, camserver.RawDir)
 		doneRaw, err := util.GetDoneTry(rawDir)
 		if err != nil {
 			continue
@@ -114,7 +126,15 @@ func getCameraStatus(s *Server, id string) (CameraStatus, error) {
 		if err := util.ReadJSONFile(filepath.Join(rawDir, doneRaw, util.DoneFilename), &doneBody); err != nil {
 			continue
 		}
+
+		pvDir := filepath.Join(segDir, camserver.ProcessVideoDir)
+		doneProcess, err := util.GetDoneTry(pvDir)
+		if err != nil {
+			continue
+		}
+
 		t = &doneBody.T
+		rawPath = filepath.Join(pvDir, doneProcess, camserver.RawMPEGTSFilename)
 	}
 	if t == nil {
 		return CameraStatus{}, errors.Errorf("not found %#v", day)
@@ -122,6 +142,7 @@ func getCameraStatus(s *Server, id string) (CameraStatus, error) {
 	status := CameraStatus{
 		ID:            id,
 		T:             t.In(util.TaipeiTZ),
+		RawPath:       rawPath,
 		LiveRaw:       PathLive + "?" + url.Values{"c": {id}, "fn": {camserver.RawMPEGTSFilename}}.Encode(),
 		LiveCount:     PathLive + "?" + url.Values{"c": {id}, "fn": {camserver.CountVideoFilename}}.Encode(),
 		ConfigureLink: PathConfigure + "?" + url.Values{"c": {id}}.Encode(),

@@ -2,6 +2,7 @@ package camserver
 
 import (
 	"bytes"
+	"camserver/util"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -34,6 +35,11 @@ type CountOutput struct {
 }
 
 func runCount(ctx context.Context, script, dst, src string, cfg CountConfig) (CountOutput, error) {
+	var err error
+	cfg.Height, cfg.Width, err = util.GetVideoSize(ctx, src)
+	if err != nil {
+		return CountOutput{}, errors.Wrap(err, "")
+	}
 	cfgB, err := json.Marshal(cfg)
 	if err != nil {
 		return CountOutput{}, errors.Wrap(err, "")

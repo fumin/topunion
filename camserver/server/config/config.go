@@ -53,8 +53,6 @@ func NewPersistedConfig(fpath string) (*PersistedConfig, error) {
 			return nil, errors.Errorf("duplicate camera \"%s\" %#v", camCfg.ID, camCfg)
 		}
 
-		pc.config.Camera[i].Count.Height = camCfg.Height
-		pc.config.Camera[i].Count.Width = camCfg.Width
 		pc.cameraID[camCfg.ID] = i
 	}
 

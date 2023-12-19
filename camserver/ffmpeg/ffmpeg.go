@@ -12,10 +12,20 @@ import (
 	"github.com/pkg/errors"
 )
 
+type Stream struct {
+	Index         int    `json:"index"`
+	CodecType     string `json:"codec_type"`
+	CodecName     string `json:"codec_name"`
+	CodecLongName string `json:"codec_long_name"`
+	Width         int    `json:"width"`
+	Height        int    `json:"height"`
+}
+
 type ProbeOutput struct {
-	Stdout string
-	Stderr string
-	Format struct {
+	Stdout  string
+	Stderr  string
+	Streams []Stream `json:"streams"`
+	Format  struct {
 		Filename   string `json:"filename"`
 		FormatName string `json:"format_name"`
 		Duration   float64

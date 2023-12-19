@@ -1,7 +1,6 @@
 package util
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"math/rand"
@@ -10,8 +9,6 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-
-	"camserver/ffmpeg"
 )
 
 const (
@@ -116,26 +113,6 @@ func WriteJSONFile(fpath string, v interface{}) error {
 		return errors.Wrap(err, "")
 	}
 	return nil
-}
-
-func ReadVideoDuration(ctx context.Context, r io.Reader) (float64, error) {
-	f, err := os.CreateTemp("", "")
-	if err != nil {
-		return -1, errors.Wrap(err, "")
-	}
-	defer os.Remove(f.Name())
-	if _, err := io.Copy(f, r); err != nil {
-		return -1, errors.Wrap(err, "")
-	}
-	if err := f.Close(); err != nil {
-		return -1, errors.Wrap(err, "")
-	}
-
-	probe, err := ffmpeg.FFProbe(ctx, []string{f.Name()})
-	if err != nil {
-		return -1, errors.Wrap(err, "")
-	}
-	return probe.Format.Duration, nil
 }
 
 func GetDoneTry(root string) (string, error) {
