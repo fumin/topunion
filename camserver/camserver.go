@@ -6,7 +6,6 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -123,11 +122,7 @@ func ProcessVideo(ctx context.Context, db *sql.DB, scripts Scripts, countCfg Cou
 		return errors.Wrap(err, "")
 	}
 
-	doneB, err := json.Marshal(countOut)
-	if err != nil {
-		return errors.Wrap(err, "")
-	}
-	if err := os.WriteFile(filepath.Join(dir, util.DoneFilename), doneB, os.ModePerm); err != nil {
+	if err := util.WriteJSONFile(filepath.Join(dir, util.DoneFilename), countOut); err != nil {
 		return errors.Wrap(err, "")
 	}
 	return nil
