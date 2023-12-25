@@ -53,7 +53,17 @@ func TestProcessVideo(t *testing.T) {
 		t.Fatalf("%+v", probe)
 	}
 
-	// Check count.
+	// Check count in done file.
+	donePath := filepath.Join(runDir, util.DoneFilename)
+	var countOut CountOutput
+	if err := util.ReadJSONFile(donePath, &countOut); err != nil {
+		t.Fatalf("%+v", err)
+	}
+	if countOut.Passed != 10 {
+		t.Fatalf("%#v", countOut)
+	}
+
+	// Check count in database.
 	qt := time.Date(2023, time.December, 1, 17, 0, 0, 0, time.UTC)
 	n, err := readStat(ctx, env.db, qt, arg.Camera)
 	if err != nil {
