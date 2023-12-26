@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +32,7 @@ const (
 
 	PathSaveCamera = "/SaveCamera"
 	PathConfigure  = "/Configure"
+	PathStat       = "/Stat"
 	PathLive       = "/Live"
 	PathServe      = "/Serve"
 )
@@ -288,9 +290,17 @@ type stat struct {
 	n        int
 }
 
-func readLatestStat(ctx context.Context, db *sql.DB) ([]stat, error) {
-	sqlStr := `SELECT dateHour, camera, n FROM ` + camserver.TableStat + ` ORDER BY dateHour DESC LIMIT 80`
-	rows, err := db.QueryContext(ctx, sqlStr)
+func statByTime(ctx context.Context, db *sql.DB, dateHour string, ascending bool, limit int) ([]stat, error) {
+	cmpOp := "<="
+	order := "DESC"
+	if ascending {
+		cmpOp = ">="
+		order = "ASC"
+	}
+	sqlStr := `SELECT dateHour, camera, n FROM ` + camserver.TableStat +
+		` WHERE dateHour ` + cmpOp + ` ?` +
+		` ORDER BY dateHour ` + order + ` LIMIT ` + strconv.Itoa(limit)
+	rows, err := db.QueryContext(ctx, sqlStr, dateHour)
 	if err != nil {
 		return nil, errors.Wrap(err, "")
 	}
@@ -310,14 +320,21 @@ func readLatestStat(ctx context.Context, db *sql.DB) ([]stat, error) {
 	return stats, nil
 }
 
-//go:embed tmpl/index.html
-var indexHTML string
-var indexTmpl = template.Must(template.New("").Parse(indexHTML))
+//go:embed tmpl/stat.html
+var statHTML string
+var statTmpl = template.Must(template.New("").Parse(statHTML))
 
-func Index(s *Server, w http.ResponseWriter, r *http.Request) {
+func Stat(s *Server, w http.ResponseWriter, r *http.Request) {
+	dateHour := r.FormValue("h")
+	ascending, err := strconv.ParseBool(r.FormValue("asc"))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	stats, err := readLatestStat(ctx, s.DB)
+	stats, err := statByTime(ctx, s.DB, dateHour, ascending, 80)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
 		return
@@ -329,39 +346,133 @@ func Index(s *Server, w http.ResponseWriter, r *http.Request) {
 	}
 	dataM := make(map[string]datum)
 	camerasM := make(map[string]struct{})
-	for _, s := range stats {
-		d, ok := dataM[s.dateHour]
+	for _, st := range stats {
+		d, ok := dataM[st.dateHour]
 		if !ok {
 			d.Camera = make(map[string]int)
-			d.DateHour, err = time.ParseInLocation(util.FormatDateHour, s.dateHour, time.UTC)
+			d.DateHour, err = time.ParseInLocation(util.FormatDateHour, st.dateHour, time.UTC)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
 				return
 			}
 			d.DateHour = d.DateHour.In(util.TaipeiTZ)
 		}
-		d.Camera[s.camera] = s.n
+		d.Camera[st.camera] = st.n
 
-		dataM[s.dateHour] = d
-		camerasM[s.camera] = struct{}{}
+		dataM[st.dateHour] = d
+		camerasM[st.camera] = struct{}{}
 	}
 	data := make([]datum, 0, len(dataM))
 	for _, d := range dataM {
 		data = append(data, d)
 	}
 	slices.SortFunc(data, func(a, b datum) int { return -cmp.Compare(a.DateHour.Unix(), b.DateHour.Unix()) })
+
 	cameras := make([]string, 0, len(camerasM))
 	for c := range camerasM {
 		cameras = append(cameras, c)
 	}
 	slices.Sort(cameras)
 
+	t := time.Date(0, 12, 25, 0, 0, 0, 0, time.UTC)
+	if len(data) > 0 {
+		t = data[0].DateHour
+	}
+	v := url.Values{}
+	v.Set("asc", "true")
+	v.Set("h", t.In(time.UTC).Format(util.FormatDateHour))
+	prevURL := r.URL.Path + "?" + v.Encode()
+
+	t = time.Now().AddDate(0, 0, 1)
+	if len(data) > 0 {
+		t = data[len(data)-1].DateHour
+	}
+	v = url.Values{}
+	v.Set("asc", "false")
+	v.Set("h", t.In(time.UTC).Format(util.FormatDateHour))
+	nextURL := r.URL.Path + "?" + v.Encode()
+
 	page := struct {
 		Camera []string
 		Data   []datum
+		Prev   string
+		Next   string
 	}{}
 	page.Camera = cameras
 	page.Data = data
+	page.Prev = prevURL
+	page.Next = nextURL
+	if err := statTmpl.Execute(w, page); err != nil {
+		log.Printf("%+v", err)
+	}
+}
+
+//go:embed tmpl/index.html
+var indexHTML string
+var indexTmpl = template.Must(template.New("").Parse(indexHTML))
+
+func Index(s *Server, w http.ResponseWriter, r *http.Request) {
+	dateHour := time.Now().AddDate(0, 0, 1).In(time.UTC).Format(util.FormatDateHour)
+	ascending := false
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	stats, err := statByTime(ctx, s.DB, dateHour, ascending, 80)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
+		return
+	}
+
+	type datum struct {
+		DateHour time.Time
+		Camera   map[string]int
+	}
+	dataM := make(map[string]datum)
+	camerasM := make(map[string]struct{})
+	for _, st := range stats {
+		d, ok := dataM[st.dateHour]
+		if !ok {
+			d.Camera = make(map[string]int)
+			d.DateHour, err = time.ParseInLocation(util.FormatDateHour, st.dateHour, time.UTC)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("%+v", err), http.StatusBadRequest)
+				return
+			}
+			d.DateHour = d.DateHour.In(util.TaipeiTZ)
+		}
+		d.Camera[st.camera] = st.n
+
+		dataM[st.dateHour] = d
+		camerasM[st.camera] = struct{}{}
+	}
+	data := make([]datum, 0, len(dataM))
+	for _, d := range dataM {
+		data = append(data, d)
+	}
+	slices.SortFunc(data, func(a, b datum) int { return -cmp.Compare(a.DateHour.Unix(), b.DateHour.Unix()) })
+
+	cameras := make([]string, 0, len(camerasM))
+	for c := range camerasM {
+		cameras = append(cameras, c)
+	}
+	slices.Sort(cameras)
+
+	t := time.Now().AddDate(0, 0, 1)
+	if len(data) > 0 {
+		t = data[len(data)-1].DateHour
+	}
+	v := url.Values{}
+	v.Set("asc", "false")
+	v.Set("h", t.In(time.UTC).Format(util.FormatDateHour))
+	nextURL := PathStat + "?" + v.Encode()
+
+	page := struct {
+		Camera []string
+		Data   []datum
+		Next   string
+	}{}
+	page.Camera = cameras
+	page.Data = data
+	page.Next = nextURL
 	if err := indexTmpl.Execute(w, page); err != nil {
 		log.Printf("%+v", err)
 	}
@@ -467,6 +578,7 @@ func NewServer(dir string) (*Server, error) {
 	handleFunc(s, PathConfigure, Configure)
 	handleJSON(s, PathSaveCamera, SaveCamera)
 	handleFunc(s, "/Status", Status)
+	handleFunc(s, PathStat, Stat)
 	handleFunc(s, PathLive, Live)
 	handleJSON(s, "/UploadVideo", UploadVideo)
 	handleFunc(s, PathServe, Serve)

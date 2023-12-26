@@ -52,7 +52,7 @@ func mainWithErr() error {
 
 	// Run background jobs.
 	s.DoJobForever()
-	// daily(func() error { return server.DeleteOldVideos(s.VideoDir, 10*24*time.Hour) })
+	daily(func() error { return server.DeleteOldVideos(s.VideoDir, 10*24*time.Hour) })
 
 	// Run HTTP server.
 	idleConnsClosed := make(chan struct{})

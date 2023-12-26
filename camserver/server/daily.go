@@ -65,9 +65,10 @@ func walkVideo(dir string, fn func(string) error) error {
 		if d.IsDir() {
 			return nil
 		}
-		if filepath.Ext(path) != ".ts" {
+		if !isVideo(path) {
 			return nil
 		}
+
 		if err := fn(filepath.Join(dir, path)); err != nil {
 			return errors.Wrap(err, "")
 		}
@@ -77,4 +78,13 @@ func walkVideo(dir string, fn func(string) error) error {
 		return errors.Wrap(err, "")
 	}
 	return nil
+}
+
+func isVideo(fpath string) bool {
+	for _, videoExt := range []string{".ts", ".mp4"} {
+		if filepath.Ext(fpath) == videoExt {
+			return true
+		}
+	}
+	return false
 }
