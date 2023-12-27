@@ -253,6 +253,7 @@ func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 	// Send background job.
 	jobArg := camserver.ProcessVideoInput{
 		Camera:   cam,
+		VideoID:  videoID,
 		Dir:      videoDir,
 		Filepath: dst,
 		Time:     t,

@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	TableJob     = "job"
-	TableDeadJob = "deadjob"
-	TableStat    = "stat"
+	TableJob       = "job"
+	TableDeadJob   = "deadjob"
+	TableStat      = "stat"
+	TableStatDedup = "stat_dedup"
 
 	// Folder for the save raw video task.
 	RawDir   = "raw"
@@ -53,6 +54,12 @@ func CreateTables(ctx context.Context, db *sql.DB) error {
 			camera TEXT,
 			n INTEGER,
 			PRIMARY KEY (dateHour, camera)
+		) STRICT`,
+		`CREATE TABLE ` + TableStatDedup + ` (
+			camera TEXT,
+			video TEXT,
+			t INTEGER,
+			PRIMARY KEY (camera, video)
 		) STRICT`,
 	}
 	for _, sqlStr := range sqlStrs {
@@ -96,6 +103,7 @@ func NewScripts(dir string) (Scripts, error) {
 
 type ProcessVideoInput struct {
 	Camera   string
+	VideoID  string
 	Dir      string
 	Filepath string
 	Time     time.Time
@@ -118,7 +126,7 @@ func ProcessVideo(ctx context.Context, db *sql.DB, scripts Scripts, countCfg Cou
 		return errors.Wrap(err, "")
 	}
 
-	if err := incrStat(ctx, db, arg.Time, arg.Camera, countOut.Passed); err != nil {
+	if err := incrStat(ctx, db, arg.Time, arg.Camera, arg.VideoID, countOut.Passed); err != nil {
 		return errors.Wrap(err, "")
 	}
 
@@ -158,7 +166,7 @@ func toMPEGTS(ctx context.Context, dst, src string) error {
 	return nil
 }
 
-func incrStat(ctx context.Context, db *sql.DB, t time.Time, camera string, diff int) error {
+func incrStat(ctx context.Context, db *sql.DB, t time.Time, camera, videoID string, diff int) error {
 	dateHour := t.In(time.UTC).Format(util.FormatDateHour)
 
 	tx, err := db.Begin()
@@ -166,6 +174,22 @@ func incrStat(ctx context.Context, db *sql.DB, t time.Time, camera string, diff 
 		return errors.Wrap(err, "")
 	}
 	defer tx.Rollback()
+
+	selectVPStr := `SELECT t FROM ` + TableStatDedup + ` WHERE camera=? AND video=?`
+	var prevT int
+	err = tx.QueryRowContext(ctx, selectVPStr, camera, videoID).Scan(&prevT)
+	switch err {
+	case sql.ErrNoRows:
+	case nil:
+		return nil
+	default:
+		return errors.Wrap(err, "")
+	}
+
+	insertVPStr := `INSERT INTO ` + TableStatDedup + ` (camera, video, t) VALUES (?, ?, ?)`
+	if _, err := tx.ExecContext(ctx, insertVPStr, camera, videoID, time.Now().Unix()); err != nil {
+		return errors.Wrap(err, "")
+	}
 
 	selectStr := `SELECT n FROM ` + TableStat + ` WHERE dateHour=? AND camera=?`
 	var n int
@@ -175,8 +199,8 @@ func incrStat(ctx context.Context, db *sql.DB, t time.Time, camera string, diff 
 		}
 	}
 
-	insertStr := `REPLACE INTO ` + TableStat + ` (dateHour, camera, n) VALUES (?, ?, ?)`
-	if _, err := tx.ExecContext(ctx, insertStr, dateHour, camera, n+diff); err != nil {
+	insertStatStr := `REPLACE INTO ` + TableStat + ` (dateHour, camera, n) VALUES (?, ?, ?)`
+	if _, err := tx.ExecContext(ctx, insertStatStr, dateHour, camera, n+diff); err != nil {
 		return errors.Wrap(err, "")
 	}
 

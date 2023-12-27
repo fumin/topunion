@@ -178,6 +178,7 @@ func (s *Server) receiveJob() (jobRun, bool, error) {
 	}
 	jr.createAt = time.Unix(createAt, 0)
 
+	// Get job maximum duration.
 	if err := s.dispatchJob(&jr); err != nil {
 		return jobRun{}, false, errors.Wrap(err, fmt.Sprintf("\"%s\" \"%s\"", jr.id, jr.b))
 	}

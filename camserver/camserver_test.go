@@ -26,11 +26,13 @@ func TestProcessVideo(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 
+	videoTime := time.Date(2023, time.December, 2, 1, 43, 22, 0, util.TaipeiTZ)
 	arg := ProcessVideoInput{
 		Camera:   "testcam",
+		VideoID:  videoTime.In(time.UTC).Format(util.FormatDatetime),
 		Dir:      env.dir,
 		Filepath: testVid,
-		Time:     time.Date(2023, time.December, 2, 1, 43, 22, 0, util.TaipeiTZ),
+		Time:     videoTime,
 	}
 	cfg := shilinSDConfig()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -66,6 +68,18 @@ func TestProcessVideo(t *testing.T) {
 	// Check count in database.
 	qt := time.Date(2023, time.December, 1, 17, 0, 0, 0, time.UTC)
 	n, err := readStat(ctx, env.db, qt, arg.Camera)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	if n != 10 {
+		t.Fatalf("%d", n)
+	}
+
+	// Retries should not affect the count.
+	if err := ProcessVideo(ctx, env.db, env.scripts, cfg, arg); err != nil {
+		t.Fatalf("%+v", err)
+	}
+	n, err = readStat(ctx, env.db, qt, arg.Camera)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}

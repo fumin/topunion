@@ -1,14 +1,29 @@
 package server
 
 import (
-	"camserver/util"
+	"context"
+	"database/sql"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/pkg/errors"
+
+	"camserver"
+	"camserver/util"
 )
+
+func DeleteOldVideoProcess(db *sql.DB) error {
+	cutoff := time.Now().AddDate(0, 0, -1).Unix()
+	deleteStr := `DELETE FROM ` + camserver.TableStatDedup + ` WHERE t < ?`
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if _, err := db.ExecContext(ctx, deleteStr, cutoff); err != nil {
+		return errors.Wrap(err, "")
+	}
+	return nil
+}
 
 func DeleteOldVideos(root string, dur time.Duration) error {
 	cutoff := time.Now().Add(-dur)
