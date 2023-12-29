@@ -187,8 +187,8 @@ func (s *Server) receiveJob() (jobRun, bool, error) {
 	lease := time.Now().Add(margin).Unix()
 	updateSQL := `UPDATE ` + camserver.TableJob + ` SET
 		lease=?+duration, retries=retries+1
-		WHERE id=?`
-	if _, err := tx.ExecContext(ctx, updateSQL, lease, jr.id); err != nil {
+		WHERE id=? AND retries=?`
+	if _, err := tx.ExecContext(ctx, updateSQL, lease, jr.id, jr.retries); err != nil {
 		return jobRun{}, false, errors.Wrap(err, "")
 	}
 
