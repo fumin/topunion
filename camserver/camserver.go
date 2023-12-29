@@ -39,6 +39,7 @@ func CreateTables(ctx context.Context, db *sql.DB) error {
 			createAt INTEGER,
 			job BLOB,
 			duration INTEGER,
+			shard INTEGER,
 			lease INTEGER,
 			retries INTEGER,
 			PRIMARY KEY (id)
@@ -170,7 +171,7 @@ func toMPEGTS(ctx context.Context, dst, src string) error {
 func incrStat(ctx context.Context, db *sql.DB, t time.Time, camera, videoID string, diff int) error {
 	dateHour := t.In(time.UTC).Format(util.FormatDateHour)
 
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return errors.Wrap(err, "")
 	}

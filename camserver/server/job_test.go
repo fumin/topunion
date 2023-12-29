@@ -33,7 +33,7 @@ func TestJobSuccess(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 
-	if _, jerr, err := s.doJob(); jerr != nil || err != nil {
+	if _, jerr, err := s.doJob(jobShard{shard: 0, divisor: 1}); jerr != nil || err != nil {
 		t.Fatalf("%+v %+v", jerr, err)
 	}
 	if !jobHasRun {
@@ -69,7 +69,7 @@ func TestJobTimeout(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 
-	_, jerr, err := s.doJob()
+	_, jerr, err := s.doJob(jobShard{shard: 0, divisor: 1})
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
@@ -102,7 +102,7 @@ func TestJobError(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 
-	_, jerr, err := s.doJob()
+	_, jerr, err := s.doJob(jobShard{shard: 0, divisor: 1})
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
@@ -121,7 +121,7 @@ func TestJobError(t *testing.T) {
 
 	// Retry a few more times.
 	for i := 0; i < 2; i++ {
-		_, jerr, err = s.doJob()
+		_, jerr, err = s.doJob(jobShard{shard: 0, divisor: 1})
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
@@ -140,7 +140,7 @@ func TestJobError(t *testing.T) {
 	}
 
 	// Last try.
-	_, jerr, err = s.doJob()
+	_, jerr, err = s.doJob(jobShard{shard: 0, divisor: 1})
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}

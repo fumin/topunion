@@ -41,8 +41,9 @@ func SendJob(ctx context.Context, db *sql.DB, jb Job) error {
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
-	sqlStr := `INSERT INTO ` + camserver.TableJob + ` (id, createAt, job, duration, lease, retries) VALUES (?, ?, ?, ?, 0, 0)`
-	arg := []interface{}{id, createAt, jobB, jb.DurationSec}
+	shard := rand.Int()
+	sqlStr := `INSERT INTO ` + camserver.TableJob + ` (id, createAt, job, duration, shard, lease, retries) VALUES (?, ?, ?, ?, ?, 0, 0)`
+	arg := []interface{}{id, createAt, jobB, jb.DurationSec, shard}
 	if _, err := db.ExecContext(ctx, sqlStr, arg...); err != nil {
 		return errors.Wrap(err, "")
 	}
@@ -52,11 +53,11 @@ func SendJob(ctx context.Context, db *sql.DB, jb Job) error {
 func (s *Server) DoJobForever() {
 	concurrency := max(1, runtime.NumCPU()-2)
 	for i := 0; i < concurrency; i++ {
-		go func() {
+		go func(shard jobShard) {
 			milliSec := i*1000 + rand.Intn(2000)
 			<-time.After(time.Duration(milliSec) * time.Millisecond)
 			for {
-				emptyQueue, _, err := s.doJob()
+				emptyQueue, _, err := s.doJob(shard)
 				if err != nil {
 					log.Printf("%+v", err)
 				}
@@ -66,7 +67,7 @@ func (s *Server) DoJobForever() {
 					<-time.After(time.Duration(secs) * time.Second)
 				}
 			}
-		}()
+		}(jobShard{shard: i, divisor: concurrency})
 	}
 }
 
@@ -125,13 +126,17 @@ func (s *Server) dispatchJob(jr *jobRun) error {
 	return nil
 }
 
-func (s *Server) doJob() (bool, error, error) {
-	jr, queueEmpty, err := s.receiveJob()
+func (s *Server) doJob(shard jobShard) (bool, error, error) {
+	jr, queueEmpty, err := s.receiveJob(shard)
 	if err != nil {
 		return false, nil, errors.Wrap(err, "")
 	}
 	if queueEmpty {
 		return true, nil, nil
+	}
+
+	if err := s.dispatchJob(&jr); err != nil {
+		return false, nil, errors.Wrap(err, fmt.Sprintf("\"%s\" \"%s\"", jr.id, jr.b))
 	}
 
 	// Run the job logic.
@@ -157,19 +162,25 @@ func (s *Server) doJob() (bool, error, error) {
 	return false, jobErr, nil
 }
 
-func (s *Server) receiveJob() (jobRun, bool, error) {
-	tx, err := s.DB.Begin()
+type jobShard struct {
+	shard   int
+	divisor int
+}
+
+func (s *Server) receiveJob(shard jobShard) (jobRun, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return jobRun{}, false, errors.Wrap(err, "")
 	}
 	defer tx.Rollback()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	selectSQL := `SELECT id, createAt, job, retries FROM ` + camserver.TableJob + ` WHERE lease < ? LIMIT 1`
+	selectSQL := `SELECT id, createAt, job, retries FROM ` + camserver.TableJob + ` WHERE lease < ? AND (shard % ?)=? LIMIT 1`
+	arg := []interface{}{time.Now().Unix(), shard.divisor, shard.shard}
 	var jr jobRun
 	var createAt int64
-	if err := tx.QueryRowContext(ctx, selectSQL, time.Now().Unix()).Scan(&jr.id, &createAt, &jr.b, &jr.retries); err != nil {
+	if err := tx.QueryRowContext(ctx, selectSQL, arg...).Scan(&jr.id, &createAt, &jr.b, &jr.retries); err != nil {
 		if err == sql.ErrNoRows {
 			return jobRun{}, true, nil
 		}
@@ -177,18 +188,13 @@ func (s *Server) receiveJob() (jobRun, bool, error) {
 	}
 	jr.createAt = time.Unix(createAt, 0)
 
-	// Get job maximum duration.
-	if err := s.dispatchJob(&jr); err != nil {
-		return jobRun{}, false, errors.Wrap(err, fmt.Sprintf("\"%s\" \"%s\"", jr.id, jr.b))
-	}
-
 	// Add some margin to ensure no two jobs are running at the same time.
 	const margin = time.Minute
 	lease := time.Now().Add(margin).Unix()
 	updateSQL := `UPDATE ` + camserver.TableJob + ` SET
 		lease=?+duration, retries=retries+1
-		WHERE id=? AND retries=?`
-	if _, err := tx.ExecContext(ctx, updateSQL, lease, jr.id, jr.retries); err != nil {
+		WHERE id=?`
+	if _, err := tx.ExecContext(ctx, updateSQL, lease, jr.id); err != nil {
 		return jobRun{}, false, errors.Wrap(err, "")
 	}
 
@@ -215,14 +221,14 @@ func deleteJob(db *sql.DB, id string) error {
 }
 
 func moveDeadJob(db *sql.DB, jr jobRun, jobErr error) error {
-	tx, err := db.Begin()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
 	defer tx.Rollback()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	deleteSQL := `DELETE FROM ` + camserver.TableJob + ` WHERE id=?`
 	if _, err := db.ExecContext(ctx, deleteSQL, jr.id); err != nil {
 		return errors.Wrap(err, "")
