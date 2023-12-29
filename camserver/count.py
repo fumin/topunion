@@ -290,12 +290,24 @@ def newMasker(config, imgH, imgW, minW, device):
     m.x2 = min(max(m.x2, 0), imgW)
     m.y2 = min(max(m.y2, 0), imgH)
 
+    # Make sure the cropped size is divisible by 2, as required by h264 video encoding.
+    if (m.x2-m.x1) % 2 == 1:
+        if m.x1 == 0:
+            m.x2 += 1
+        else:
+            m.x1 -= 1
+    if (m.y2-m.y1) % 2 == 1:
+        if m.y1 == 0:
+            m.y2 += 1
+        else:
+            m.y1 -= 1
+
     croppedH, croppedW = m.y2-m.y1, m.x2-m.x1
     numChannels = 3
     mask = np.zeros([croppedH, croppedW, numChannels], dtype=np.uint8)
     slope = config["Shift"] / croppedW
     for x in range(croppedW):
-        yS = config["Y"] + int(x*slope)
+        yS = config["Y"]-m.y1 + int(x*slope)
         yE = yS + config["Height"]
         mask[yS:yE, x] = 1
     m.mask = torch.from_numpy(mask).to(device)
@@ -477,7 +489,7 @@ def mainWithErr(args):
     except Exception as e:
         aiout, err = AIOutput(), traceback.format_exc()
     if err:
-        print(json.dumps({"Status": 400, "Body": {"Error": ("%s %s" % (v, err))}}))
+        print(json.dumps({"Status": 400, "Body": {"Error": ("%s" % (err))}}))
         return
 
     print(json.dumps({"Status": 200, "Body": vars(aiout)}))
