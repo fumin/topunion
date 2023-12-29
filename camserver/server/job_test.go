@@ -26,7 +26,7 @@ func TestJobSuccess(t *testing.T) {
 		jobHasRun = true
 		return nil
 	}
-	jb := Job{Func: jobForTesting}
+	jb := Job{Func: jobForTesting, DurationSec: 1}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := SendJob(ctx, s.DB, jb); err != nil {
@@ -62,8 +62,7 @@ func TestJobTimeout(t *testing.T) {
 			return nil
 		}
 	}
-	jobForTestingDuration = time.Millisecond
-	jb := Job{Func: jobForTesting}
+	jb := Job{Func: jobForTesting, DurationSec: 1}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := SendJob(ctx, s.DB, jb); err != nil {
@@ -96,8 +95,7 @@ func TestJobError(t *testing.T) {
 	jobForTestingFunc = func(ctx context.Context) error {
 		return jobErr
 	}
-	jobForTestingDuration = time.Millisecond
-	jb := Job{Func: jobForTesting}
+	jb := Job{Func: jobForTesting, DurationSec: 1}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := SendJob(ctx, s.DB, jb); err != nil {

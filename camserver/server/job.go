@@ -23,15 +23,15 @@ const (
 
 var (
 	// Only for testing purpose.
-	jobForTestingFunc     func(context.Context) error
-	jobForTestingDuration time.Duration
+	jobForTestingFunc func(context.Context) error
 )
 
 type JobFunc string
 
 type Job struct {
-	Func JobFunc
-	Arg  interface{}
+	Func        JobFunc
+	Arg         interface{}
+	DurationSec int
 }
 
 func SendJob(ctx context.Context, db *sql.DB, jb Job) error {
@@ -41,8 +41,8 @@ func SendJob(ctx context.Context, db *sql.DB, jb Job) error {
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
-	sqlStr := `INSERT INTO ` + camserver.TableJob + ` (id, createAt, job, lease, retries) VALUES (?, ?, ?, 0, 0)`
-	arg := []interface{}{id, createAt, jobB}
+	sqlStr := `INSERT INTO ` + camserver.TableJob + ` (id, createAt, job, duration, lease, retries) VALUES (?, ?, ?, ?, 0, 0)`
+	arg := []interface{}{id, createAt, jobB, jb.DurationSec}
 	if _, err := db.ExecContext(ctx, sqlStr, arg...); err != nil {
 		return errors.Wrap(err, "")
 	}
@@ -87,14 +87,14 @@ type jobRun struct {
 	retries  int
 	job      Job
 
-	fn       func(context.Context) error
-	duration time.Duration
+	fn func(context.Context) error
 }
 
 func (s *Server) dispatchJob(jr *jobRun) error {
 	jb := struct {
-		Func JobFunc
-		Arg  json.RawMessage
+		Func        JobFunc
+		Arg         json.RawMessage
+		DurationSec int
 	}{}
 	if err := json.Unmarshal(jr.b, &jb); err != nil {
 		return errors.Wrap(err, "")
@@ -104,13 +104,11 @@ func (s *Server) dispatchJob(jr *jobRun) error {
 	var err error
 	switch jb.Func {
 	case jobForTesting:
-		jr.duration = jobForTestingDuration
 		jr.fn = jobForTestingFunc
 	case JobProcessVideo:
 		var arg camserver.ProcessVideoInput
 		err = json.Unmarshal(jb.Arg, &arg)
 		jr.job.Arg = arg
-		jr.duration = 5 * time.Minute
 		jr.fn = func(ctx context.Context) error {
 			c, ok := s.C.GetCamera(arg.Camera)
 			if !ok {
@@ -137,7 +135,8 @@ func (s *Server) doJob() (bool, error, error) {
 	}
 
 	// Run the job logic.
-	ctx, cancel := context.WithTimeout(context.Background(), jr.duration)
+	timeout := time.Duration(jr.job.DurationSec) * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	jobErr := jr.fn(ctx)
 
@@ -185,9 +184,9 @@ func (s *Server) receiveJob() (jobRun, bool, error) {
 
 	// Add some margin to ensure no two jobs are running at the same time.
 	const margin = time.Minute
-	lease := time.Now().Add(jr.duration + margin).Unix()
+	lease := time.Now().Add(margin).Unix()
 	updateSQL := `UPDATE ` + camserver.TableJob + ` SET
-		lease=?, retries=retries+1
+		lease=?+duration, retries=retries+1
 		WHERE id=?`
 	if _, err := tx.ExecContext(ctx, updateSQL, lease, jr.id); err != nil {
 		return jobRun{}, false, errors.Wrap(err, "")

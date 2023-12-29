@@ -38,6 +38,7 @@ func CreateTables(ctx context.Context, db *sql.DB) error {
 			id TEXT,
 			createAt INTEGER,
 			job BLOB,
+			duration INTEGER,
 			lease INTEGER,
 			retries INTEGER,
 			PRIMARY KEY (id)

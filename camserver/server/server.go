@@ -258,7 +258,7 @@ func UploadVideo(s *Server, w http.ResponseWriter, r *http.Request) (interface{}
 		Filepath: dst,
 		Time:     t,
 	}
-	job := Job{Func: JobProcessVideo, Arg: jobArg}
+	job := Job{Func: JobProcessVideo, Arg: jobArg, DurationSec: 5 * 60}
 	if err := SendJob(ctx, s.DB, job); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
