@@ -161,7 +161,7 @@ cat > /etc/kea/kea-dhcp4.conf <<- EOM
 		]
 	}
 	],
-	"loggers": [{"name": "kea-dhcp4", severity: "DEBUG"}]
+	"loggers": [{"name": "kea-dhcp4", "severity": "DEBUG"}]
 }
 }
 EOM
