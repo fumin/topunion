@@ -95,17 +95,21 @@ EOM
 /usr/local/cuda/bin/nvcc -o saxpy saxpy.cu
 ./saxpy
 
-# ETHERNET_IFACE=$(nmcli --terse --fields DEVICE,TYPE dev | grep ethernet | cut -d ":" -f 1)
-# ETHERNET_PREFIX=192.168.2
-# ETHERNET_IP=${ETHERNET_PREFIX}.1
+ETHERNET_IFACE=$(nmcli --terse --fields DEVICE,TYPE dev | grep ethernet | cut -d ":" -f 1)
+ETHERNET_PREFIX=192.168.0
+ETHERNET_IP=${ETHERNET_PREFIX}.2
+ETHERNET_MACADDR=$(nmcli dev show ${ETHERNET_IFACE} | grep HWADDR | cut -d ":" -f 2- | tr -d " ")
 cat > /etc/netplan/01-network-manager-all.yaml <<- EOM
 # Let NetworkManager manage all devices on this system
 network:
   version: 2
   renderer: NetworkManager
-  # ethernets:
-  #   ${ETHERNET_IFACE}:
-  #     addresses: [${ETHERNET_IP}/24]
+  ethernets:
+    ${ETHERNET_IFACE}:
+      addresses: [${ETHERNET_IP}/24]
+      # This is a local network, so don't set it as a default gateway.
+      dhcp4-overrides:
+        use-routes: false
   wifis:
     ${WIFI_LAN_IFACE}:
       regulatory-domain: US
@@ -140,23 +144,28 @@ cat > /etc/cron.d/scan_${WIFI_LAN_IFACE} <<- EOM
 @reboot root $SCAN_SCRIPT > /tmp/scan_${WIFI_LAN_IFACE}.txt 2>&1
 EOM
 
-# apt install -y isc-dhcp-server
-# cat > /etc/dhcp/dhcpd.conf <<- EOM
-# default-lease-time 600;
-# max-lease-time 7200;
-# 
-# # IP conventions:
-# # xxx.xxx.xxx.0:   network
-# # xxx.xxx.xxx.1:   router
-# # xxx.xxx.xxx.255: broadcast
-# subnet ${ETHERNET_PREFIX}.0 netmask 255.255.255.0 {
-#  range ${ETHERNET_PREFIX}.2 ${ETHERNET_PREFIX}.254;
-#  option routers ${ETHERNET_IP};
-#  # option domain-name-servers ${ETHERNET_IP};
-#  # option domain-name "topunion.com";
-# }
-# EOM
-# systemctl restart isc-dhcp-server.service
+apt install -y kea
+cat > /etc/kea/kea-dhcp4.conf <<- EOM
+{
+"Dhcp4": {
+	"interfaces-config": {"interfaces": ["${ETHERNET_IFACE}"]},
+	"subnet4": [
+	{
+		"id": 0,
+		"subnet": "${ETHERNET_PREFIX}.0/24",
+		"pools": [{"pool": "${ETHERNET_PREFIX}.2 - ${ETHERNET_PREFIX}.254"}],
+		"option-data": [{"name": "routers", "data": "${ETHERNET_IP}"}],
+		"reservations": [
+			{"hw-address": "${ETHERNET_MACADDR}", "ip-address": "${ETHERNET_IP}"},
+			{"hw-address": "4C:77:66:81:25:F1", "ip-address": "${ETHERNET_PREFIX}.3"}
+		]
+	}
+	],
+	"loggers": [{"name": "kea-dhcp4", severity: "DEBUG"}]
+}
+}
+EOM
+systemctl restart kea-dhcp4-server
 
 # Confine multicast to loopback.
 IP_SCRIPT=/usr/local/bin/ip_init.sh
