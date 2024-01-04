@@ -53,11 +53,11 @@ func SendJob(ctx context.Context, db *sql.DB, jb Job) error {
 func (s *Server) DoJobForever() {
 	concurrency := max(1, runtime.NumCPU()-2)
 	for i := 0; i < concurrency; i++ {
-		go func(shard jobShard) {
+		go func(shard JobShard) {
 			milliSec := i*1000 + rand.Intn(2000)
 			<-time.After(time.Duration(milliSec) * time.Millisecond)
 			for {
-				emptyQueue, _, err := s.doJob(shard)
+				emptyQueue, _, err := s.DoJob(shard)
 				if err != nil {
 					log.Printf("%+v", err)
 				}
@@ -67,7 +67,7 @@ func (s *Server) DoJobForever() {
 					<-time.After(time.Duration(secs) * time.Second)
 				}
 			}
-		}(jobShard{shard: i, divisor: concurrency})
+		}(JobShard{Shard: i, Divisor: concurrency})
 	}
 }
 
@@ -101,6 +101,7 @@ func (s *Server) dispatchJob(jr *jobRun) error {
 		return errors.Wrap(err, "")
 	}
 	jr.job.Func = jb.Func
+	jr.job.DurationSec = jb.DurationSec
 
 	var err error
 	switch jb.Func {
@@ -126,7 +127,7 @@ func (s *Server) dispatchJob(jr *jobRun) error {
 	return nil
 }
 
-func (s *Server) doJob(shard jobShard) (bool, error, error) {
+func (s *Server) DoJob(shard JobShard) (bool, error, error) {
 	jr, queueEmpty, err := s.receiveJob(shard)
 	if err != nil {
 		return false, nil, errors.Wrap(err, "")
@@ -162,12 +163,12 @@ func (s *Server) doJob(shard jobShard) (bool, error, error) {
 	return false, jobErr, nil
 }
 
-type jobShard struct {
-	shard   int
-	divisor int
+type JobShard struct {
+	Shard   int
+	Divisor int
 }
 
-func (s *Server) receiveJob(shard jobShard) (jobRun, bool, error) {
+func (s *Server) receiveJob(shard JobShard) (jobRun, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
@@ -177,7 +178,7 @@ func (s *Server) receiveJob(shard jobShard) (jobRun, bool, error) {
 	defer tx.Rollback()
 
 	selectSQL := `SELECT id, createAt, job, retries FROM ` + camserver.TableJob + ` WHERE lease < ? AND (shard % ?)=? LIMIT 1`
-	arg := []interface{}{time.Now().Unix(), shard.divisor, shard.shard}
+	arg := []interface{}{time.Now().Unix(), shard.Divisor, shard.Shard}
 	var jr jobRun
 	var createAt int64
 	if err := tx.QueryRowContext(ctx, selectSQL, arg...).Scan(&jr.id, &createAt, &jr.b, &jr.retries); err != nil {
@@ -229,14 +230,15 @@ func moveDeadJob(db *sql.DB, jr jobRun, jobErr error) error {
 	}
 	defer tx.Rollback()
 
-	deleteSQL := `DELETE FROM ` + camserver.TableJob + ` WHERE id=?`
-	if _, err := db.ExecContext(ctx, deleteSQL, jr.id); err != nil {
+	jobErrStr := fmt.Sprintf("%+v", jobErr)
+	insertSQL := `INSERT INTO ` + camserver.TableDeadJob + ` (id, createAt, job, err) VALUES (?, ?, ?, ?)`
+	if _, err := tx.ExecContext(ctx, insertSQL, jr.id, jr.createAt.Unix(), jr.b, jobErrStr); err != nil {
 		return errors.Wrap(err, "")
 	}
 
-	jobErrStr := fmt.Sprintf("%+v", jobErr)
-	insertSQL := `INSERT INTO ` + camserver.TableDeadJob + ` (id, createAt, job, err) VALUES (?, ?, ?, ?)`
-	if _, err := db.ExecContext(ctx, insertSQL, jr.id, jr.createAt.Unix(), jr.b, jobErrStr); err != nil {
+	deleteSQL := `DELETE FROM ` + camserver.TableJob + ` WHERE id=?`
+	if _, err := tx.ExecContext(ctx, deleteSQL, jr.id); err != nil {
+		log.Printf("%s %s", deleteSQL, jr.id)
 		return errors.Wrap(err, "")
 	}
 
