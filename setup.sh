@@ -153,7 +153,7 @@ cat > /etc/kea/kea-dhcp4.conf <<- EOM
 	{
 		"id": 0,
 		"subnet": "${ETHERNET_PREFIX}.0/24",
-		"pools": [{"pool": "${ETHERNET_PREFIX}.2 - ${ETHERNET_PREFIX}.254"}],
+		"pools": [{"pool": "${ETHERNET_PREFIX}.16 - ${ETHERNET_PREFIX}.254"}],
 		"option-data": [{"name": "routers", "data": "${ETHERNET_IP}"}],
 		"reservations": [
 			{"hw-address": "${ETHERNET_MACADDR}", "ip-address": "${ETHERNET_IP}"},
