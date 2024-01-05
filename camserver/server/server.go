@@ -137,6 +137,7 @@ func getCameraStatus(s *Server, id string) (CameraStatus, error) {
 
 		t = &doneBody.T
 		rawPath = filepath.Join(pvDir, doneProcess, camserver.RawMPEGTSFilename)
+		break
 	}
 	if t == nil {
 		return CameraStatus{}, errors.Errorf("not found %#v", day)
