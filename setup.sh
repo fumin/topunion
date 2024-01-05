@@ -30,6 +30,10 @@ alias pbpaste='xclip -selection clipboard -o'
 open() {
         nautilus \$1 &
 }
+
+nvidia-gpu-utilization() {
+        nvidia-smi --query-gpu=timestamp,name,pci.bus_id,temperature.gpu,utilization.gpu,utilization.memory --format=csv -l 1
+}
 EOM
 
 apt update
