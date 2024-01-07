@@ -1,14 +1,19 @@
+# python shuicao.py -src=/dev/video2
 import argparse
 import logging
+import sys
 import threading
 import time
 
 import cv2
 import numpy as np
+import onnxruntime
 from PIL import Image as PILImage
 from PIL import ImageFont as PILImageFont
 import torch
 import torchvision
+import ultralytics
+import deepsparse
 
 
 class Prediction:
@@ -21,12 +26,19 @@ class Prediction:
     def draw(self, categories):
         drawn = self.src
         if len(self.labels) > 0:
-            labels_text = [categories[i] for i in self.labels]
+            font = "/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf"
+            if sys.platform == "win32":
+                font = "cour.ttf"
+
+            labels_text = []
+            for i, idx in enumerate(self.labels):
+                label = "%s %.0f" % (categories[idx], self.scores[i]*100)
+                labels_text.append(label)
+
             drawn = torchvision.utils.draw_bounding_boxes(
                     self.src,
                     boxes=torch.from_numpy(self.boxes), labels=labels_text,
-                    colors="red",
-                    width=4, font="cour.ttf", font_size=30)
+                    colors="red", width=4, font=font, font_size=30)
 
         chw = drawn
         hwc = chw.permute(1, 2, 0)
@@ -37,6 +49,9 @@ class Prediction:
 class Handler:
     def __init__(self, size):
         self.model = SSDLite(size)
+        self.model = Yolo(size)
+        self.model = HaarCascade(size)
+        self.model = NeuralMaginDeepSparse(size)
 
         self.cnt = 0
         self.spent_seconds = 0
@@ -57,7 +72,93 @@ class Handler:
 
     def _do(self, image):
         pred = self.model.predict(image)
-        cv2.imshow("img", pred.draw(self.model.categories))
+        pred_img = pred.draw(self.model.categories)
+        cv2.imshow("img", pred_img)
+
+
+class NeuralMagicDeepSparse:
+    def __init__(self, size):
+        model_stub = "zoo:cv/detection/yolov5-s/pytorch/ultralytics/coco/pruned65_quant-none"
+        self.yolo_pipeline = deepsparse.Pipeline.create(
+                task="yolo",
+                model_path=model_stub)
+        self.categories = ultralytics.YOLO().names
+
+    def predict(self, image):
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        output = self.yolo_pipeline(images=[rgb], iou_thres=0.6, conf_thres=0.001)
+
+        pred = Prediction()
+        pred.labels = output.labels
+        pred.scores = output.scores
+        pred.boxes = output.boxes
+        pred.src = self.to_torch(image)
+        return pred
+
+    def to_torch(self, rgb):
+        rgb = torch.from_numpy(rgb)
+        chw = rgb.permute(2, 0, 1)
+        return chw
+
+
+class HaarCascade:
+    def __init__(self, size):
+        self.face_classifier = cv2.CascadeClassifier(
+                cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        self.categories = ["face"]
+
+    def predict(self, image):
+        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        faces = self.face_classifier.detectMultiScale(
+                gray_image, 1.3, 5, minSize=(128, 128))
+
+        boxes = []
+        for (x, y, w, h) in faces:
+            boxes.append([x, y, x+w, y+h])
+        pred = Prediction()
+        pred.labels = np.zeros([len(boxes)], dtype=int)
+        pred.scores = np.ones([len(boxes)], dtype=float)
+        pred.boxes = np.array(boxes, dtype=float)
+        pred.src = self.to_torch(image)
+        return pred
+
+    def to_torch(self, image):
+        bgr = torch.from_numpy(image)
+        rgb = bgr[:, :, [2, 1, 0]]
+        chw = rgb.permute(2, 0, 1)
+        return chw
+
+
+class Yolo:
+    def __init__(self, size):
+        yolo = ultralytics.YOLO()
+        self.yolo = yolo
+        self.categories = yolo.names
+
+    def predict(self, image):
+        with torch.no_grad():
+            raw, preprocessed = self.preprocess(image)
+            output = self.yolo.predict(preprocessed, verbose=False)
+            pred = self.postprocess(raw, output)
+        return pred
+
+    def preprocess(self, image):
+        bgr = torch.from_numpy(image)
+        rgb = bgr[:, :, [2, 1, 0]]
+        chw = rgb.permute(2, 0, 1)
+        batch = chw.unsqueeze(0)
+
+        imgf = batch.float() / 255
+        return batch, imgf
+
+    def postprocess(self, src, output):
+        result = output[0]
+        pred = Prediction()
+        pred.labels = result.boxes.cls.numpy()
+        pred.scores = result.boxes.conf.numpy()
+        pred.boxes = result.boxes.xyxy.numpy()
+        pred.src = src[0]
+        return pred
 
 
 class SSDLite:
@@ -87,8 +188,8 @@ class SSDLite:
         chw = rgb.permute(2, 0, 1)
         batch = chw.unsqueeze(0)
 
-        transformed = self.transforms(batch)
-        return batch, transformed
+        imgf = self.transforms(batch)
+        return batch, imgf
 
     def postprocess(self, raw, output):
         # Filter confident labels.
@@ -165,13 +266,17 @@ def main():
     parser.add_argument("-src")
     args = parser.parse_args()
 
+    # cv2.setNumThreads(2)
+    # torch.set_num_threads(4)
+
     src = args.src
     # src = "rtsp://admin:0000@192.168.1.121:8080/h264_ulaw.sdp"
     cap = VideoCapture(src)
     if not cap.open():
         raise Exception("not opened")
 
-    size = [480, 640]
+    _, img = cap.read()
+    size = img.shape[:2]
     handler = Handler(size)
 
     while True:
