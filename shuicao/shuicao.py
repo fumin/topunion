@@ -1,19 +1,18 @@
 # python shuicao.py -src=/dev/video2
 import argparse
 import logging
+import queue
 import sys
 import threading
 import time
 
 import cv2
 import numpy as np
-import onnxruntime
 from PIL import Image as PILImage
 from PIL import ImageFont as PILImageFont
 import torch
 import torchvision
 import ultralytics
-import deepsparse
 
 
 class Prediction:
@@ -49,9 +48,8 @@ class Prediction:
 class Handler:
     def __init__(self, size):
         self.model = SSDLite(size)
-        self.model = Yolo(size)
-        self.model = HaarCascade(size)
-        self.model = NeuralMaginDeepSparse(size)
+        #self.model = Yolo(size)
+        #self.model = HaarCascade(size)
 
         self.cnt = 0
         self.spent_seconds = 0
@@ -74,31 +72,6 @@ class Handler:
         pred = self.model.predict(image)
         pred_img = pred.draw(self.model.categories)
         cv2.imshow("img", pred_img)
-
-
-class NeuralMagicDeepSparse:
-    def __init__(self, size):
-        model_stub = "zoo:cv/detection/yolov5-s/pytorch/ultralytics/coco/pruned65_quant-none"
-        self.yolo_pipeline = deepsparse.Pipeline.create(
-                task="yolo",
-                model_path=model_stub)
-        self.categories = ultralytics.YOLO().names
-
-    def predict(self, image):
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        output = self.yolo_pipeline(images=[rgb], iou_thres=0.6, conf_thres=0.001)
-
-        pred = Prediction()
-        pred.labels = output.labels
-        pred.scores = output.scores
-        pred.boxes = output.boxes
-        pred.src = self.to_torch(image)
-        return pred
-
-    def to_torch(self, rgb):
-        rgb = torch.from_numpy(rgb)
-        chw = rgb.permute(2, 0, 1)
-        return chw
 
 
 class HaarCascade:
@@ -163,11 +136,15 @@ class Yolo:
 
 class SSDLite:
     def __init__(self, size):
-        self.weights = torchvision.models.detection.SSDLite320_MobileNet_V3_Large_Weights.COCO_V1
+        # self.weights = torchvision.models.detection.SSDLite320_MobileNet_V3_Large_Weights.COCO_V1
+        # model = torchvision.models.detection.ssdlite320_mobilenet_v3_large(
+        #         weights=self.weights)
+        self.weights = torchvision.models.detection.FasterRCNN_MobileNet_V3_Large_FPN_Weights.COCO_V1
+        model = torchvision.models.detection.fasterrcnn_mobilenet_v3_large_fpn(
+                weights=self.weights)
+
         self.categories = self.weights.meta["categories"]
 
-        model = torchvision.models.detection.ssdlite320_mobilenet_v3_large(
-                weights=self.weights, box_score_thresh=0.9)
         model.eval()
         model = torch.jit.script(model)
         model = torch.jit.freeze(model)
@@ -220,9 +197,11 @@ class VideoCapture:
         self.src = src
 
         self.cap = None
+        self.img_ok = False
         self.img = None
 
-        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.kill = False
+        self.thread = None
 
     def open(self):
         cap = cv2.VideoCapture(self.src)
@@ -230,9 +209,10 @@ class VideoCapture:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         ok = cap.isOpened()
         if not ok:
-            return False
+            return "not opened"
 
         self.cap = cap
+        self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
         start_time = time.time()
         while time.time() - start_time < 3:
@@ -240,20 +220,27 @@ class VideoCapture:
                 break
             time.sleep(0.1)
         if self.img is None:
-            return False
+            return "no img"
 
-        return True
+        return ""
+
+    def close(self):
+        self.img_ok = False
+        self.img = None
+
+        self.kill = True
+        self.thread.join()
+        self.kill = False
+        self.cap.release()
 
     def read(self):
-        return True, self.img
+        return self.img_ok, self.img
 
     def _run(self):
         while True:
-            ok, img = self.cap.read()
-            if not ok:
-                continue
-
-            self.img = img
+            if self.kill:
+                break
+            self.img_ok, self.img = self.cap.read()
 
 
 def main():
@@ -272,8 +259,9 @@ def main():
     src = args.src
     # src = "rtsp://admin:0000@192.168.1.121:8080/h264_ulaw.sdp"
     cap = VideoCapture(src)
-    if not cap.open():
-        raise Exception("not opened")
+    err = cap.open()
+    if err:
+        raise Exception(err)
 
     _, img = cap.read()
     size = img.shape[:2]
@@ -282,6 +270,10 @@ def main():
     while True:
         ok, img = cap.read()
         if not ok:
+            cap.close()
+            err = cap.open()
+            if err:
+                logging.info("%s", err)
             continue
         handler.do(img)
 
