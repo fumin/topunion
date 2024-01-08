@@ -5,131 +5,133 @@ package main
 import (
 	"flag"
 	"log"
-	"strconv"
 
 	"github.com/dimchansky/keeloq-go"
 )
 
-func intBits(x uint64) [64]uint8 {
-	var bits [64]uint8
+func intBits(x uint64) []int {
+	bits := make([]int, 64)
 	for i := 0; i < 64; i++ {
-		bits[len(bits)-1-i] = uint8((x & (uint64(1) << i)) >> i)
+		bits[len(bits)-1-i] = int((x >> i) & 1)
 	}
 	return bits
 }
 
-func bitsInt(bits [64]uint8) uint64 {
+func bitsInt(bits []int) uint64 {
 	var n uint64
 	for i := len(bits) - 1; i >= 0; i-- {
-		digit := uint64(bits[i])
-
-		n += digit * (uint64(1) << (len(bits) - 1 - i))
+		digit := uint64(bits[i] & 1)
+		n |= (digit << (len(bits) - 1 - i))
 	}
 	return n
 }
 
-func setBits(dst [64]uint8, dstStart, src [64]uint8, srcStart, srcLen int) [64]uint8 {
-	for i := 0; i < srcLen; i++ {
-		dst[dstStart+i] = src[srcStart+i]
-	}
-	return dst
-}
-
-func setLSB(dst [64]uint8, dstStart int, src [64]uint8, n int) [64]uint8 {
-	return setBits(dst, dstStart, src, len(src)-n, n)
-}
-
-func getPlain(fn, serial, counter uint32) uint32 {
-	discmn := serial & 0x0FFF
+func packPlain(fn, serial, counter uint32) uint32 {
+	fn = (fn & ((1 << 4) - 1))
+	discmn := serial & ((1 << 10) - 1)
+	counter = (counter & ((1 << 16) - 1))
 
 	var plain uint32
-	plain |= (fn & 0x0F) << (32-4)
-	plain |= discmn
-	return plain
-
-	var plainBits [64]uint8
-
-	fn := intBits(fnInt)
-	plainBits = setLSB(plainBits, 32+0, fn, 4)
-
-	serial := intBits(serialInt)
-	plainBits = setLSB(plainBits, 32+6, serial, 10)
-
-	cnt := intBits(counter)
-	plainBits = setLSB(plainBits, 32+16, cnt, 16)
-
-	plain := uint32(bitsInt(plainBits))
+	plain |= fn << (32 - 4)
+	plain |= discmn << 16
+	plain |= counter
 	return plain
 }
 
-func newSeed1(serialInt, padInt2, padInt1 uint64) (uint64, uint64) {
-	serial := intBits(serialInt)
-	pad2 := intBits(padInt2)
-	pad1 := intBits(padInt1)
+func unpackPlain(plain uint32) (uint32, uint32, uint32) {
+	fn := plain >> (32 - 4)
 
-	var seed2Bits [64]uint8
-	seed2Bits = setLSB(seed2Bits, 32, pad2, 4)
-	seed2Bits = setLSB(seed2Bits, 32+4, serial, 28)
+	discmn := plain >> 16
+	discmn &= ((1 << 12) - 1)
 
-	var seed1Bits [64]uint8
-	seed1Bits = setLSB(seed1Bits, 32, pad1, 4)
-	seed1Bits = setLSB(seed1Bits, 32+4, serial, 28)
+	counter := plain & ((1 << 16) - 1)
 
-	seed2 := bitsInt(seed2Bits)
-	seed1 := bitsInt(seed1Bits)
-	return seed2, seed1
+	return fn, discmn, counter
 }
 
-func newSeed2(serialInt, randBitsInt uint64) (uint64, uint64) {
-	serial := intBits(serialInt)
-
-	var seed2Bits [64]uint8
-	seed2Bits = setLSB(seed2Bits, 32+4, serial, 28)
-	seed2 := bitsInt(seed2Bits)
-
-	return seed2, randBitsInt
+type seedpair struct {
+	seed2 uint32
+	seed1 uint32
 }
 
-func newSeed3(serialInt, randBitsInt uint64) (uint64, uint64) {
-	serial := intBits(serialInt)
-	randBits := intBits(randBitsInt)
+func newSeed1(serial, pad2, pad1 uint32) seedpair {
+	pad2 = (pad2 & ((1 << 4) - 1))
+	pad2 = pad2 << (32 - 4)
 
-	var seed2Bits [64]uint8
-	seed2Bits = setBits(seed2Bits, 32+4, serial, 4, 12)
-	seed2Bits = setLSB(seed2Bits, 32+16, randBits, 16)
-	seed2 := bitsInt(seed2Bits)
+	pad1 = (pad1 & ((1 << 4) - 1))
+	pad1 = pad1 << (32 - 4)
 
-	return seed2, randBitsInt
+	serial = (serial & ((1 << 28) - 1))
+
+	var pair seedpair
+	pair.seed2 |= pad2
+	pair.seed2 |= serial
+
+	pair.seed1 |= pad1
+	pair.seed1 |= serial
+
+	return pair
 }
 
-func newSeed4(randBitsInt uint64) (uint64, uint64) {
-	randBits := intBits(randBitsInt)
+func newSeed2(serial, randBits uint32) seedpair {
+	serial = (serial & ((1 << 28) - 1))
 
-	var seed2Bits [64]uint8
-	seed2Bits = setLSB(seed2Bits, 32+4, randBits, 28)
-	seed2 := bitsInt(seed2Bits)
-
-	return seed2, randBitsInt
+	var pair seedpair
+	pair.seed2 |= serial
+	pair.seed1 |= randBits
+	return pair
 }
 
-func newDeviceKeyDecrypt(seed2, seed1, masterKey uint64) uint64 {
-	deviceKey2 := intBits(keeloq.Decrypt(seed2, masterKey))
-	deviceKey1 := intBits(keeloq.Decrypt(seed1, masterKey))
+func newSeed3(serial, randBits uint32) seedpair {
+	var mask uint32 = (1 << 12) - 1
+	mask = mask << 16
+	serial &= mask
 
-	var deviceKey [64]uint8
-	deviceKey = setLSB(deviceKey, 0, deviceKey2, 32)
-	deviceKey = setLSB(deviceKey, 32, deviceKey1, 32)
-	return bitsInt(deviceKey)
+	rand16 := randBits & ((1 << 16) - 1)
+
+	var pair seedpair
+	pair.seed2 |= serial
+	pair.seed2 |= rand16
+
+	pair.seed1 |= randBits
+
+	return pair
 }
 
-func newDeviceKeyXOR(seed2, seed1, masterKey uint64) uint64 {
-	deviceKey2 := intBits(seed2 ^ (masterKey >> 32))
-	deviceKey1 := intBits(seed1 ^ (masterKey & 0xFFFFFFFF))
+func newSeed4(randBits uint32) seedpair {
+	rand28 := randBits & ((1 << 28) - 1)
+	var pair seedpair
+	pair.seed2 |= rand28
+	pair.seed1 |= randBits
+	return pair
+}
 
-	var deviceKey [64]uint8
-	deviceKey = setLSB(deviceKey, 0, deviceKey2, 32)
-	deviceKey = setLSB(deviceKey, 32, deviceKey1, 32)
-	return bitsInt(deviceKey)
+func newDeviceKeyDecrypt(seed seedpair, masterKey uint64) uint64 {
+	key2 := uint64(keeloq.Decrypt(seed.seed2, masterKey))
+	key1 := uint64(keeloq.Decrypt(seed.seed1, masterKey))
+
+	var deviceKey uint64
+	deviceKey |= (key2 << 32)
+	deviceKey |= key1
+	return deviceKey
+}
+
+func newDeviceKeyXOR(seed seedpair, masterKey uint64) uint64 {
+	m2 := uint32(masterKey >> 32)
+	key2 := uint64(seed.seed2 ^ m2)
+	m1 := uint32(masterKey & ((1 << 32) - 1))
+	key1 := uint64(seed.seed1 ^ m1)
+
+	var deviceKey uint64
+	deviceKey |= (key2 << 32)
+	deviceKey |= key1
+
+	log.Printf("seed2      %X", intBits(uint64(seed.seed2))[32:])
+	log.Printf("masterKey2 %X", intBits(masterKey)[:32])
+	log.Printf("seed1      %X", intBits(uint64(seed.seed1))[32:])
+	log.Printf("masterKey1 %X", intBits(masterKey)[32:])
+	log.Printf("deviceKey  %X", intBits(deviceKey))
+	return deviceKey
 }
 
 func main() {
@@ -141,31 +143,48 @@ func main() {
 }
 
 func mainWithErr() error {
+	const serial uint32 = 0x5B0E
+	const randBits uint32 = 0x68
+	const masterKey uint64 = 0x000002A000000356
+
 	deviceKeys := make([]uint64, 0)
 	deviceKeys = append(deviceKeys, 0x000002A000000356)
-	dkfs := []func(seed1, seed2, masterKey uint64)uint64{
+	dkfs := []func(seedpair, uint64) uint64{
 		newDeviceKeyDecrypt,
 		newDeviceKeyXOR,
 	}
 	for _, dkf := range dkfs {
-		deviceKeys = append(deviceKeys, dkf(newSeed1()))
-		{0, 0},
-		{4, 2},
+		deviceKeys = append(deviceKeys, dkf(newSeed1(serial, 0, 0), masterKey))
+		deviceKeys = append(deviceKeys, dkf(newSeed1(serial, 4, 2), masterKey))
+		deviceKeys = append(deviceKeys, dkf(newSeed2(serial, randBits), masterKey))
+		deviceKeys = append(deviceKeys, dkf(newSeed3(serial, randBits), masterKey))
+		deviceKeys = append(deviceKeys, dkf(newSeed4(randBits), masterKey))
 	}
 
-	var deviceKey uint64 = 0x5CEC6701B79FD949
-	var plain uint32 = 0x0CA69B92
-
-	deviceKey = 0x000002A000000356
-	serial := 0x00005B0E
-	counter := 0x563C
-	plain = getPlain(1, serial, counter)
-
+	var deviceKey uint64 = 0x000002A000000356
+	var btn uint32 = 1
+	var counter uint32 = 0x563C
+	plain := packPlain(btn, serial, counter)
 	cipher := keeloq.Encrypt(plain, deviceKey)
 	log.Printf("cipher 0x%X", cipher)
-
 	decrypted := keeloq.Decrypt(cipher, deviceKey)
 	log.Printf("decrypted 0x%X", decrypted)
+	log.Printf("serial    %#v", intBits(uint64(serial))[32:])
+	log.Printf("decrypted %#v", intBits(uint64(decrypted))[32:])
+	fnD, discmnD, counterD := unpackPlain(decrypted)
+	log.Printf("%X %X %X", fnD, discmnD, counterD)
+
+	ciphers := []uint32{
+		0xFCDFA07D,
+		0xE5A7A64A,
+	}
+	for i, deviceKey := range deviceKeys {
+		for j, cipher := range ciphers {
+			decrypted := keeloq.Decrypt(cipher, deviceKey)
+			fn, discmn, counter := unpackPlain(decrypted)
+			log.Printf("%d %d: %X %X %X", i, j, fn, discmn, counter)
+		}
+	}
 
 	return nil
 }
