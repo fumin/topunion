@@ -187,14 +187,14 @@ func main() {
 }
 
 func mainWithErr() error {
-	serials := []uint32{0, 0xFFFFFFFF, 0x5B0E, 0x68, 0x0E5B0000, 0x68000000, reverse32(0x5B0E), reverse32(0x68)}
+	serials := []uint32{0, 0xFFFFFFFF, 0x5B0E, 0x68, 0x0E5B0000, 0x68000000, reverse32(0x5B0E), reverse32(0x68), 0xBD7587AE, reverse32(0xBD7587AE)}
 	for i := 0; i < 16; i++ {
 		k := 0x00005B0E | (uint32(i) << 28)
 		serials = append(serials, k)
 		k = 0x00000068 | (uint32(i) << 28)
 		serials = append(serials, k)
 	}
-	randomBits := []uint32{0, 0xFFFFFFFF, 0x5B0E, 0x68, 0x0E5B0000, 0x68000000, reverse32(0x5B0E), reverse32(0x68)}
+	randomBits := []uint32{0, 0xFFFFFFFF, 0x5B0E, 0x68, 0x0E5B0000, 0x68000000, reverse32(0x5B0E), reverse32(0x68), 0xBD7587AE, reverse32(0xBD7587AE)}
 	masterKeys := []uint64{0, 0xFFFFFFFFFFFFFFFF, 0x000002A000000356, 0x00000356000002A0, 0xA002000056030000, 0x56030000A0020000, concat(reverse32(0x000002A0), reverse32(0x00000356)), concat(reverse32(0x00000356), reverse32(0x000002A0))}
 	for i := 0; i < 16; i++ {
 		for j := 0; j < 16; j++ {
