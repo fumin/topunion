@@ -67,7 +67,7 @@ class ModbusClient:
         protocolID = intWord(0)
         frame = txID + protocolID + msgLen + msg
 
-        # logging.info("%s", " ".join("{:02x}".format(x) for x in frame))
+        logging.info("%s", " ".join("{:02x}".format(x) for x in frame))
         self.s.sendall(bytes(frame))
 
 
@@ -104,7 +104,7 @@ class Prediction:
 class Handler:
     def __init__(self, size):
         self.model = SSDLite(size)
-        #self.model = Yolo(size)
+        self.model = Yolo(size)
         #self.model = HaarCascade(size)
 
         self.cnt = 0
@@ -160,14 +160,14 @@ class HaarCascade:
 
 class Yolo:
     def __init__(self, size):
-        yolo = ultralytics.YOLO()
+        yolo = ultralytics.YOLO("yolov8m.pt")
         self.yolo = yolo
         self.categories = yolo.names
 
     def predict(self, image):
         with torch.no_grad():
             raw, preprocessed = self.preprocess(image)
-            output = self.yolo.predict(preprocessed, verbose=False)
+            output = self.yolo.predict(preprocessed, conf=0.9, verbose=False)
             pred = self.postprocess(raw, output)
         return pred
 
@@ -309,15 +309,17 @@ def main():
     parser.add_argument("-src")
     args = parser.parse_args()
 
-    modbusHost = "127.0.0.1"
-    modbusPort = 5020
+    modbusHost = "192.168.1.111"
+    modbusPort = 502
     modbusModuleID = 0x0F
     modbusC = ModbusClient(modbusHost, modbusPort, modbusModuleID)
-    while True:
-        register = 0x03
-        data = [1, 2, 3, 4, 5, 6]
-        modbusC.writeMultiple(register, data)
-        time.sleep(1)
+    heartbeat = -1
+    # while True:
+    #     heartbeat += 1
+    #     register = 1010
+    #     data = [1, 2, 3, 4, 5, 6, 7, 8, 9, heartbeat]
+    #     modbusC.writeMultiple(register, data)
+    #     time.sleep(1)
 
     # cv2.setNumThreads(2)
     # torch.set_num_threads(4)
@@ -342,9 +344,17 @@ def main():
                 logging.info("%s", err)
             continue
         handler.do(img)
+        # cv2.imwrite("data/{}.jpg".format(int(time.time()*1000)), img)
+
+        heartbeat += 1
+        register = 1010
+        data = [1, 2, 3, 4, 5, 6, 7, 8, 9, heartbeat]
+        modbusC.writeMultiple(register, data)
 
         keyboard = cv2.waitKey(1) & 0xFF
-        if keyboard == ord('q'):
+        if keyboard == ord("s"):
+            cv2.imwrite("data/{}.jpg".format(int(time.time()*1000)), img)
+        if keyboard == ord("q"):
             break
 
 
