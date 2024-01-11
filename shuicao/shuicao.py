@@ -2,6 +2,7 @@
 import argparse
 import logging
 import queue
+import socket
 import sys
 import threading
 import time
@@ -13,6 +14,61 @@ from PIL import ImageFont as PILImageFont
 import torch
 import torchvision
 import ultralytics
+
+
+def intWord(x):
+    high = x >> 8
+    low = x & ((1 << 8)-1)
+    return [high, low]
+
+
+class ModbusClient:
+    def __init__(self, host, port, moduleID):
+        self.moduleID = moduleID
+        self.txID = -1
+        self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.s.connect((host, port))
+
+    def close(self):
+        self.s.close()
+
+    def writeMultiple(self, registerStart, registerData):
+        """
+        HeadHoldingRegister WritePoints NumberOfBytes DeviceData1 ... DeviceDataN
+        2 byte              2 byte      1 byte        2 byte          2 byte
+                                              |
+                                              |---->  |<---------n * 2--------->|
+        """
+        register = intWord(registerStart)
+        numReg = intWord(len(registerData))
+
+        values = []
+        for d in registerData:
+            values += intWord(d)
+
+        numBytes = intWord(len(values))[1:]
+        data = register + numReg + numBytes + values
+
+        self.send(0x10, data)
+
+    def send(self, functionCode, data):
+        """
+        TransactionID ProtocolID MessageLength ModuleID FunctionCode Data
+        2 byte        2 byte     2 byte        1 byte   1 byte       0-252 byte
+                                       |
+                                       |--->   |<---------------------->|
+        """
+        self.txID += 1
+
+        msg = [self.moduleID, functionCode] + data
+        msgLen = intWord(len(msg))
+
+        txID = intWord(self.txID)
+        protocolID = intWord(0)
+        frame = txID + protocolID + msgLen + msg
+
+        # logging.info("%s", " ".join("{:02x}".format(x) for x in frame))
+        self.s.sendall(bytes(frame))
 
 
 class Prediction:
@@ -252,6 +308,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-src")
     args = parser.parse_args()
+
+    modbusHost = "127.0.0.1"
+    modbusPort = 5020
+    modbusModuleID = 0x0F
+    modbusC = ModbusClient(modbusHost, modbusPort, modbusModuleID)
+    while True:
+        register = 0x03
+        data = [1, 2, 3, 4, 5, 6]
+        modbusC.writeMultiple(register, data)
+        time.sleep(1)
 
     # cv2.setNumThreads(2)
     # torch.set_num_threads(4)
