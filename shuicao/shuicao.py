@@ -1,6 +1,7 @@
 # python shuicao.py -src=/dev/video2
 import argparse
 import logging
+import os
 import queue
 import socket
 import sys
@@ -9,8 +10,7 @@ import time
 
 import cv2
 import numpy as np
-from PIL import Image as PILImage
-from PIL import ImageFont as PILImageFont
+import paddleocr
 import torch
 import torchvision
 import ultralytics
@@ -71,7 +71,7 @@ class ModbusClient:
         self.s.sendall(bytes(frame))
 
 
-class Prediction:
+class ObjectDetectionPred:
     def __init__(self):
         self.labels = np.zeros([0], dtype=int)
         self.scores = np.zeros([0], dtype=float)
@@ -102,36 +102,46 @@ class Prediction:
 
 
 class Handler:
-    def __init__(self, size):
-        self.model = SSDLite(size)
-        self.model = Yolo(size)
-        #self.model = HaarCascade(size)
+    def __init__(self, modbusC, ocr):
+        self.modbusC = modbusC
+        self.ocr = ocr
 
-        self.cnt = 0
-        self.spent_seconds = 0
+        self._profile_cnt = 0
+        self._profile_seconds = 0
 
     def do(self, image):
         start_time = time.time()
 
         self._do(image)
 
-        self.cnt += 1
-        self.spent_seconds += time.time() - start_time
-        if self.cnt > 100:
-            fps = float(self.cnt) / self.spent_seconds
-            self.cnt = 0
-            self.spent_seconds = 0
+        self._profile_cnt += 1
+        self._profile_seconds += time.time() - start_time
+        if self._profile_cnt > 1:
+            fps = float(self._profile_cnt) / self._profile_seconds
+            self._profile_cnt = 0
+            self._profile_seconds = 0
 
             logging.info("fps %.2f", fps)
 
-    def _do(self, image):
-        pred = self.model.predict(image)
-        pred_img = pred.draw(self.model.categories)
-        cv2.imshow("img", pred_img)
+    def _do(self, img):
+        predImg, result = self._ocr(img)
+
+        cv2.imshow("img", predImg)
+
+    def _ocr(self, img):
+        result = self.ocr.ocr(img)
+        result = result[0]
+
+        image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        boxes = [line[0] for line in result]
+        txts = [line[1][0] for line in result]
+        scores = [line[1][1] for line in result]
+        predImg = paddleocr.draw_ocr(image, boxes, txts, scores, font_path="msjh.ttc")
+        return predImg, result
 
 
 class HaarCascade:
-    def __init__(self, size):
+    def __init__(self):
         self.face_classifier = cv2.CascadeClassifier(
                 cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         self.categories = ["face"]
@@ -144,7 +154,7 @@ class HaarCascade:
         boxes = []
         for (x, y, w, h) in faces:
             boxes.append([x, y, x+w, y+h])
-        pred = Prediction()
+        pred = ObjectDetectionPred()
         pred.labels = np.zeros([len(boxes)], dtype=int)
         pred.scores = np.ones([len(boxes)], dtype=float)
         pred.boxes = np.array(boxes, dtype=float)
@@ -159,7 +169,7 @@ class HaarCascade:
 
 
 class Yolo:
-    def __init__(self, size):
+    def __init__(self):
         yolo = ultralytics.YOLO("yolov8m.pt")
         self.yolo = yolo
         self.categories = yolo.names
@@ -182,7 +192,7 @@ class Yolo:
 
     def postprocess(self, src, output):
         result = output[0]
-        pred = Prediction()
+        pred = ObjectDetectionPred()
         pred.labels = result.boxes.cls.numpy()
         pred.scores = result.boxes.conf.numpy()
         pred.boxes = result.boxes.xyxy.numpy()
@@ -191,7 +201,7 @@ class Yolo:
 
 
 class SSDLite:
-    def __init__(self, size):
+    def __init__(self):
         # self.weights = torchvision.models.detection.SSDLite320_MobileNet_V3_Large_Weights.COCO_V1
         # model = torchvision.models.detection.ssdlite320_mobilenet_v3_large(
         #         weights=self.weights)
@@ -239,7 +249,7 @@ class SSDLite:
             scores.append(s)
             boxes.append(out["boxes"][i].numpy())
 
-        pred = Prediction()
+        pred = ObjectDetectionPred()
         pred.src = raw[0]
         pred.labels = np.array(labels, dtype=int)
         pred.scores = np.array(scores, dtype=float)
@@ -266,10 +276,13 @@ class VideoCapture:
         ok = cap.isOpened()
         if not ok:
             return "not opened"
-
         self.cap = cap
         self.thread = threading.Thread(target=self._run, daemon=True)
+
+        self.img_ok = False
+        self.img = None
         self.thread.start()
+
         start_time = time.time()
         while time.time() - start_time < 3:
             if self.img is not None:
@@ -281,9 +294,6 @@ class VideoCapture:
         return ""
 
     def close(self):
-        self.img_ok = False
-        self.img = None
-
         self.kill = True
         self.thread.join()
         self.kill = False
@@ -299,6 +309,17 @@ class VideoCapture:
             self.img_ok, self.img = self.cap.read()
 
 
+class Img:
+    def __init__(self, img):
+        self._img = img
+
+    def open(self):
+        return ""
+
+    def read(self):
+        return True, self._img
+
+
 def main():
     logging.basicConfig()
     lg = logging.getLogger()
@@ -309,11 +330,14 @@ def main():
     parser.add_argument("-src")
     args = parser.parse_args()
 
+    # cv2.setNumThreads(2)
+    # torch.set_num_threads(4)
+
     modbusHost = "192.168.1.111"
     modbusPort = 502
     modbusModuleID = 0x0F
-    modbusC = ModbusClient(modbusHost, modbusPort, modbusModuleID)
-    heartbeat = -1
+    modbusC = None
+    # modbusC = ModbusClient(modbusHost, modbusPort, modbusModuleID)
     # while True:
     #     heartbeat += 1
     #     register = 1010
@@ -321,19 +345,20 @@ def main():
     #     modbusC.writeMultiple(register, data)
     #     time.sleep(1)
 
-    # cv2.setNumThreads(2)
-    # torch.set_num_threads(4)
+    ocr = paddleocr.PaddleOCR(
+        ocr_version="PP-OCR",
+        use_angle_cls=True, lang="en",
+        show_log=True)
 
     src = args.src
     # src = "rtsp://admin:0000@192.168.1.121:8080/h264_ulaw.sdp"
-    cap = VideoCapture(src)
+    # cap = VideoCapture(src)
+    cap = Img(cv2.imread("C:\\Users\\a3367\\Downloads\\3ad8b44aaace998891b1f55d18.png"))
     err = cap.open()
     if err:
         raise Exception(err)
 
-    _, img = cap.read()
-    size = img.shape[:2]
-    handler = Handler(size)
+    handler = Handler(modbusC, ocr)
 
     while True:
         ok, img = cap.read()
@@ -344,12 +369,6 @@ def main():
                 logging.info("%s", err)
             continue
         handler.do(img)
-        # cv2.imwrite("data/{}.jpg".format(int(time.time()*1000)), img)
-
-        heartbeat += 1
-        register = 1010
-        data = [1, 2, 3, 4, 5, 6, 7, 8, 9, heartbeat]
-        modbusC.writeMultiple(register, data)
 
         keyboard = cv2.waitKey(1) & 0xFF
         if keyboard == ord("s"):
