@@ -117,7 +117,7 @@ class Handler:
         self._profile_cnt += 1
         self._profile_seconds += time.time() - start_time
         if self._profile_cnt > 1:
-            fps = float(self._profile_cnt) / self._profile_seconds
+            fps = float(self._profile_cnt) / max(self._profile_seconds, 1e-3)
             self._profile_cnt = 0
             self._profile_seconds = 0
 
@@ -129,14 +129,19 @@ class Handler:
         cv2.imshow("img", predImg)
 
     def _ocr(self, img):
-        result = self.ocr.ocr(img)
+        vizEffectHeight = 15
+        result = self.ocr.ocr(img[vizEffectHeight:])
         result = result[0]
 
         image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        boxes = [line[0] for line in result]
-        txts = [line[1][0] for line in result]
-        scores = [line[1][1] for line in result]
-        predImg = paddleocr.draw_ocr(image, boxes, txts, scores, font_path="msjh.ttc")
+        predImg = paddleocr.draw_ocr(image, [], [], [])
+        if result:
+            boxes = np.stack([line[0] for line in result])
+            # boxes.shape == [text_count, 4 (rectangle_points), 2 (x, y)]
+            boxes[:, :, 1] += vizEffectHeight
+            txts = [line[1][0] for line in result]
+            scores = [line[1][1] for line in result]
+            predImg = paddleocr.draw_ocr(image, boxes, txts, scores, font_path="msjh.ttc")
         return predImg, result
 
 
@@ -346,14 +351,14 @@ def main():
     #     time.sleep(1)
 
     ocr = paddleocr.PaddleOCR(
-        ocr_version="PP-OCR",
+        ocr_version="PP-OCRv4",
         use_angle_cls=True, lang="en",
         show_log=True)
 
-    src = args.src
     # src = "rtsp://admin:0000@192.168.1.121:8080/h264_ulaw.sdp"
-    # cap = VideoCapture(src)
-    cap = Img(cv2.imread("C:\\Users\\a3367\\Downloads\\3ad8b44aaace998891b1f55d18.png"))
+    src = args.src
+    cap = VideoCapture(src)
+    # cap = Img(cv2.imread("C:\\Users\\a3367\\Downloads\\3ad8b44aaace998891b1f55d18.png"))
     err = cap.open()
     if err:
         raise Exception(err)
