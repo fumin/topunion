@@ -1,6 +1,7 @@
 # python shuicao.py -src=/dev/video2
 import argparse
 import logging
+import math
 import os
 import queue
 import socket
@@ -101,6 +102,53 @@ class ObjectDetectionPred:
         return bgr.numpy()
 
 
+def dist2D(x, y):
+    return math.sqrt(math.pow(x[0]-y[0], 2)+math.pow(x[1]-y[1], 2))
+
+
+class Target:
+    def __init__(self, name, center):
+        self.name = name
+        self.center = center
+
+    def __str__(self):
+        return "%s %s" % (self.name, self.center)
+
+
+class Match:
+    def __init__(self, idx, target):
+        self.idx = idx
+        self.target = target
+
+
+def findTarget(names, boxes, targets):
+    matches = []
+    for i in range(len(names)):
+        name = names[i]
+        box = boxes[i]
+
+        target = findTargetOne(name, box, targets)
+        if target:
+            matches.append(Match(i, target))
+
+    return matches
+
+
+def findTargetOne(name, box, targets):
+    center = ((box[0][0]+box[2][0])/2, (box[0][1]+ box[2][1])/2)
+    size = (dist2D(box[0], box[1]), dist2D(box[0], box[3]))
+
+    for t in targets:
+        sameName = (t.name == name)
+        dist = dist2D(t.center, center)
+        if sameName:
+            logging.info("%s %s %s %s", name, t.center, center, dist)
+        if sameName and (dist < 2):
+            return t
+
+    return None
+
+
 class Handler:
     def __init__(self, modbusC, ocr):
         self.modbusC = modbusC
@@ -133,15 +181,32 @@ class Handler:
         result = self.ocr.ocr(img[vizEffectHeight:])
         result = result[0]
 
-        image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        predImg = paddleocr.draw_ocr(image, [], [], [])
+        # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        predImg = paddleocr.draw_ocr(img, [], [], [])
         if result:
-            boxes = np.stack([line[0] for line in result])
-            # boxes.shape == [text_count, 4 (rectangle_points), 2 (x, y)]
-            boxes[:, :, 1] += vizEffectHeight
             txts = [line[1][0] for line in result]
             scores = [line[1][1] for line in result]
-            predImg = paddleocr.draw_ocr(image, boxes, txts, scores, font_path="msjh.ttc")
+            boxes = np.stack([line[0] for line in result])
+            # The shape of boxes is: [text_count, 4 (rectangle_points), 2 (x, y)]
+            boxes[:, :, 1] += vizEffectHeight
+
+            targets = [
+                    Target("Tank01", (544.5, 238.5)),
+                    Target("Tank02", (542.5, 239)),
+                    Target("Tank03", (545, 234)),
+                    Target("Tank04", (542.5, 239)),
+                    ]
+            matches = findTarget(txts, boxes, targets)
+            for m in matches:
+                thickness = 100
+                cv2.rectangle(img, [0, 0], (img.shape[1], img.shape[0]), [0, 0, 255], thickness)
+                fontSize = 5
+                loc = np.array([thickness/2, thickness/2+fontSize*10+5], dtype=int)
+                cv2.putText(img, m.target.name, loc, cv2.FONT_HERSHEY_PLAIN, fontSize, (0, 0, 255), thickness=5)
+                logging.info("%s %s", txts[m.idx], m.target)
+
+            predImg = paddleocr.draw_ocr(img, boxes, txts, scores, font_path="msjh.ttc")
+
         return predImg, result
 
 
