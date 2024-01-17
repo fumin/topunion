@@ -180,9 +180,7 @@ class Handler:
         vizEffectHeight = 15
         result = self.ocr.ocr(img[vizEffectHeight:])
         result = result[0]
-
-        # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        predImg = paddleocr.draw_ocr(img, [], [], [])
+        txts, scores, boxes = [], [], []
         if result:
             txts = [line[1][0] for line in result]
             scores = [line[1][1] for line in result]
@@ -190,22 +188,22 @@ class Handler:
             # The shape of boxes is: [text_count, 4 (rectangle_points), 2 (x, y)]
             boxes[:, :, 1] += vizEffectHeight
 
-            targets = [
-                    Target("Tank01", (544.5, 238.5)),
-                    Target("Tank02", (542.5, 239)),
-                    Target("Tank03", (545, 234)),
-                    Target("Tank04", (542.5, 239)),
-                    ]
-            matches = findTarget(txts, boxes, targets)
-            for m in matches:
-                thickness = 100
-                cv2.rectangle(img, [0, 0], (img.shape[1], img.shape[0]), [0, 0, 255], thickness)
-                fontSize = 5
-                loc = np.array([thickness/2, thickness/2+fontSize*10+5], dtype=int)
-                cv2.putText(img, m.target.name, loc, cv2.FONT_HERSHEY_PLAIN, fontSize, (0, 0, 255), thickness=5)
-                logging.info("%s %s", txts[m.idx], m.target)
+        targets = [
+                Target("Tank01", (544.5, 238.5)),
+                Target("Tank02", (542.5, 239)),
+                Target("Tank03", (545, 234)),
+                Target("Tank04", (542.5, 239)),
+                ]
+        matches = findTarget(txts, boxes, targets)
+        for m in matches:
+            thickness = 100
+            cv2.rectangle(img, [0, 0], (img.shape[1], img.shape[0]), [0, 0, 255], thickness)
+            fontSize = 5
+            loc = np.array([thickness/2, thickness/2+fontSize*10+5], dtype=int)
+            cv2.putText(img, m.target.name, loc, cv2.FONT_HERSHEY_PLAIN, fontSize, (0, 0, 255), thickness=5)
+            logging.info("%s %s", txts[m.idx], m.target)
 
-            predImg = paddleocr.draw_ocr(img, boxes, txts, scores, font_path="msjh.ttc")
+        predImg = paddleocr.draw_ocr(img, boxes, txts, scores, font_path="msjh.ttc")
 
         return predImg, result
 
