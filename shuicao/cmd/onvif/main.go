@@ -69,13 +69,19 @@ func setIP(ctx context.Context, device *onvif.Device) error {
 			Enabled bool `xml:"onvif:Enabled"`
 			IPv4    struct {
 				Enabled bool `xml:"onvif:Enabled"`
-				DHCP    bool `xml:"onvif:DHCP"`
+				Manual  struct {
+					Address      string `xml:"onvif:Address"`
+					PrefixLength int    `xml:"onvif:PrefixLength"`
+				} `xml:"onvif:Manual"`
+				DHCP bool `xml:"onvif:DHCP"`
 			} `xml:"onvif:IPv4"`
 		} `xml:"tds:NetworkInterface"`
 	}{}
 	setInterface.InterfaceToken = ni.Token
 	setInterface.NetworkInterface.Enabled = true
 	setInterface.NetworkInterface.IPv4.Enabled = true
+	setInterface.NetworkInterface.IPv4.Manual.Address = "169.254.36.6"
+	setInterface.NetworkInterface.IPv4.Manual.PrefixLength = 16
 	setInterface.NetworkInterface.IPv4.DHCP = true
 	log.Printf("%#v", setInterface)
 	setResp, err := device.CallMethod(setInterface)
@@ -88,6 +94,32 @@ func setIP(ctx context.Context, device *onvif.Device) error {
 		return errors.Wrap(err, "")
 	}
 	log.Printf("%s", setB)
+
+	setZero := onvifdevice.SetZeroConfiguration{}
+	setZero.InterfaceToken = ni.Token
+	setZero.Enabled = true
+	setZeroResp, err := device.CallMethod(setZero)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	defer setZeroResp.Body.Close()
+	setZeroB, err := io.ReadAll(setZeroResp.Body)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	log.Printf("%s", setZeroB)
+
+	getZero := onvifdevice.GetZeroConfiguration{}
+	getZeroResp, err := device.CallMethod(getZero)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	defer getZeroResp.Body.Close()
+	getZeroB, err := io.ReadAll(getZeroResp.Body)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	log.Printf("%s", getZeroB)
 
 	return nil
 }
@@ -134,7 +166,7 @@ func main() {
 }
 
 func mainWithErr() error {
-	xaddr := "192.168.0.4:80"
+	xaddr := "192.168.0.123:80"
 	username := "admin"
 	password := "123456"
 	device, err := onvif.NewDevice(onvif.DeviceParams{Xaddr: xaddr, Username: username, Password: password})
@@ -144,9 +176,10 @@ func mainWithErr() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	// if err := setIP(ctx, device); err != nil {
-	// 	return errors.Wrap(err, "")
-	// }
+	if err := setIP(ctx, device); err != nil {
+		return errors.Wrap(err, "")
+	}
+	return nil
 
 	uri, err := getStreamUri(ctx, device)
 	if err != nil {

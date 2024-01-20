@@ -23,6 +23,10 @@ def intWord(x):
     return [high, low]
 
 
+def wordInt(w):
+    return (w[0] << 8) + w[1]
+
+
 class ModbusClient:
     def __init__(self, host, port, moduleID):
         self.moduleID = moduleID
@@ -32,6 +36,25 @@ class ModbusClient:
 
     def close(self):
         self.s.close()
+
+    def readMultiple(self, registerStart, registerNum):
+        register = intWord(registerStart)
+        numReg = intWord(registerNum)
+
+        dataSent = register + numReg
+        self.send(0x03, dataSent)
+        resp = self.recv()
+
+        numBytes = resp[1]
+        data = []
+        i = 2
+        while i+1 < len(resp):
+            w = resp[i:i+2]
+            data.append(wordInt(w))
+            i += 2
+
+        return data
+
 
     def writeMultiple(self, registerStart, registerData):
         """
@@ -51,6 +74,7 @@ class ModbusClient:
         data = register + numReg + numBytes + values
 
         self.send(0x10, data)
+        resp = self.recv()
 
     def send(self, functionCode, data):
         """
@@ -68,8 +92,18 @@ class ModbusClient:
         protocolID = intWord(0)
         frame = txID + protocolID + msgLen + msg
 
-        logging.info("%s", " ".join("{:02x}".format(x) for x in frame))
+        # logging.info("%s", " ".join("{:02x}".format(x) for x in frame))
         self.s.sendall(bytes(frame))
+
+    def recv(self):
+        resp = self.s.recv(1024)
+
+        if len(resp) < 7:
+            return []
+        msgLen = wordInt(resp[4:6])
+        moduleID = resp[6]
+        data = resp[7:]
+        return data
 
 
 class ObjectDetectionPred:
@@ -107,12 +141,29 @@ def dist2D(x, y):
 
 
 class Target:
-    def __init__(self, name, center):
+    def __init__(self, stateIdx, name, center):
+        self.stateIdx = stateIdx
         self.name = name
         self.center = center
 
     def __str__(self):
         return "%s %s" % (self.name, self.center)
+
+
+def setTargets(names, boxes, targets):
+    for i in range(len(names)):
+        name = names[i]
+        box = boxes[i]
+
+        tID = -1
+        for i, t in enumerate(targets):
+            if t.name == name:
+                tID = i
+                break
+        if tID == -1:
+            continue
+
+        targets[tID].center = ((box[0][0]+box[2][0])/2, (box[0][1]+ box[2][1])/2)
 
 
 class Match:
@@ -127,9 +178,9 @@ def findTarget(names, boxes, targets):
         name = names[i]
         box = boxes[i]
 
-        target = findTargetOne(name, box, targets)
-        if target:
-            matches.append(Match(i, target))
+        tID = findTargetOne(name, box, targets)
+        if tID != -1:
+            matches.append(Match(i, targets[tID]))
 
     return matches
 
@@ -138,20 +189,61 @@ def findTargetOne(name, box, targets):
     center = ((box[0][0]+box[2][0])/2, (box[0][1]+ box[2][1])/2)
     size = (dist2D(box[0], box[1]), dist2D(box[0], box[3]))
 
-    for t in targets:
+    for i, t in enumerate(targets):
         sameName = (t.name == name)
         dist = dist2D(t.center, center)
-        if sameName:
-            logging.info("%s %s %s %s", name, t.center, center, dist)
+        if sameName and False:
+            logging.info("%s target %s center %s dist %s", name, t.center, center, dist)
         if sameName and (dist < 2):
-            return t
+            return i
 
-    return None
+    return -1
+
+
+class Tank:
+    def __init__(self):
+        self.ok = 0
+
+    def reset(self):
+        self.ok = 0
+
+
+class State:
+    def __init__(self):
+        self.counter = 0
+        self.setTarget = False
+        self.tanks = []
+        for i in range(4):
+            self.tanks.append(Tank())
+
+        self.b = [0 for x in range(10)]
+
+    def marshal(self):
+        for i in range(len(self.b)):
+            self.b[i] = 0
+
+        for i, t in enumerate(self.tanks):
+            self.b[i] = t.ok
+        self.b[9] = self.counter
+
+        return self.b
+
+    def reset(self):
+        for t in self.tanks:
+            t.reset()
 
 
 class Handler:
     def __init__(self, modbusC, ocr):
         self.modbusC = modbusC
+
+        self.state = State()
+        self.targets = [
+                Target(0, "01", (411.0, 202.0)),
+                Target(1, "02", (410.5, 189.0)),
+                Target(2, "06", (412.5, 192.5)),
+                Target(3, "04", (410.0, 190.0)),
+                ]
         self.ocr = ocr
 
         self._profile_cnt = 0
@@ -164,7 +256,7 @@ class Handler:
 
         self._profile_cnt += 1
         self._profile_seconds += time.time() - start_time
-        if self._profile_cnt > 1:
+        if self._profile_cnt > 100:
             fps = float(self._profile_cnt) / max(self._profile_seconds, 1e-3)
             self._profile_cnt = 0
             self._profile_seconds = 0
@@ -172,40 +264,59 @@ class Handler:
             logging.info("fps %.2f", fps)
 
     def _do(self, img):
-        predImg, result = self._ocr(img)
-
+        self.sync()
+        predImg = self._ocr(img)
+        self.report()
         cv2.imshow("img", predImg)
 
     def _ocr(self, img):
-        vizEffectHeight = 15
-        result = self.ocr.ocr(img[vizEffectHeight:])
+        vizEffectHeight = 25
+        result = self.ocr.ocr(img[:img.shape[0]-vizEffectHeight], cls=False)
         result = result[0]
         txts, scores, boxes = [], [], []
         if result:
             txts = [line[1][0] for line in result]
             scores = [line[1][1] for line in result]
-            boxes = np.stack([line[0] for line in result])
             # The shape of boxes is: [text_count, 4 (rectangle_points), 2 (x, y)]
-            boxes[:, :, 1] += vizEffectHeight
+            boxes = np.stack([line[0] for line in result])
 
-        targets = [
-                Target("Tank01", (544.5, 238.5)),
-                Target("Tank02", (542.5, 239)),
-                Target("Tank03", (545, 234)),
-                Target("Tank04", (542.5, 239)),
-                ]
-        matches = findTarget(txts, boxes, targets)
+        if self.state.setTarget:
+            setTargets(txts, boxes, self.targets)
+        # logging.info("targets %s", [str(x) for x in self.targets])
+        matches = findTarget(txts, boxes, self.targets)
         for m in matches:
-            thickness = 100
-            cv2.rectangle(img, [0, 0], (img.shape[1], img.shape[0]), [0, 0, 255], thickness)
-            fontSize = 5
-            loc = np.array([thickness/2, thickness/2+fontSize*10+5], dtype=int)
-            cv2.putText(img, m.target.name, loc, cv2.FONT_HERSHEY_PLAIN, fontSize, (0, 0, 255), thickness=5)
-            logging.info("%s %s", txts[m.idx], m.target)
-
+            self.draw_match(img, m, txts)
         predImg = paddleocr.draw_ocr(img, boxes, txts, scores, font_path="msjh.ttc")
 
-        return predImg, result
+        self.state.reset()
+        self.state.counter += 1
+        for m in matches:
+            sid = m.target.stateIdx
+            self.state.tanks[sid].ok = 1
+
+        return predImg
+
+    def report(self):
+        if self.state.setTarget:
+            self.modbusC.writeMultiple(1020, [0])
+
+        self.modbusC.writeMultiple(1010, self.state.marshal())
+
+    def draw_match(self, img, match, txts):
+        thickness = 100
+        cv2.rectangle(img, [0, 0], (img.shape[1], img.shape[0]), [0, 0, 255], thickness)
+        fontSize = 5
+        loc = np.array([thickness/2, thickness/2+fontSize*10+5], dtype=int)
+        cv2.putText(img, match.target.name, loc, cv2.FONT_HERSHEY_PLAIN, fontSize, (0, 0, 255), thickness=5)
+
+    def sync(self):
+        reg1020 = self.modbusC.readMultiple(1020, 1)
+        if len(reg1020) != 1:
+            return
+        if reg1020[0] == 1:
+            self.state.setTarget = True
+        else:
+            self.state.setTarget = False
 
 
 class HaarCascade:
@@ -404,22 +515,15 @@ def main():
     modbusHost = "192.168.1.111"
     modbusPort = 502
     modbusModuleID = 0x0F
-    modbusC = None
-    # modbusC = ModbusClient(modbusHost, modbusPort, modbusModuleID)
-    # while True:
-    #     heartbeat += 1
-    #     register = 1010
-    #     data = [1, 2, 3, 4, 5, 6, 7, 8, 9, heartbeat]
-    #     modbusC.writeMultiple(register, data)
-    #     time.sleep(1)
+    modbusC = ModbusClient(modbusHost, modbusPort, modbusModuleID)
 
     ocr = paddleocr.PaddleOCR(
         ocr_version="PP-OCRv4",
         use_angle_cls=True, lang="en",
-        show_log=True)
+        show_log=False)
 
-    # src = "rtsp://admin:0000@192.168.1.121:8080/h264_ulaw.sdp"
-    src = args.src
+    src = "rtsp://169.254.36.6:554/mpeg4cif?username=admin&password=123456"
+    # src = args.src
     cap = VideoCapture(src)
     # cap = Img(cv2.imread("C:\\Users\\a3367\\Downloads\\3ad8b44aaace998891b1f55d18.png"))
     err = cap.open()
