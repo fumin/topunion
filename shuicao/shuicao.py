@@ -1,5 +1,6 @@
 # python shuicao.py -src=/dev/video2
 import argparse
+import inspect
 import logging
 import math
 import os
@@ -31,11 +32,19 @@ class ModbusClient:
     def __init__(self, host, port, moduleID):
         self.moduleID = moduleID
         self.txID = -1
+
+        self.host = host
+        self.port = port
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.connect((host, port))
 
     def close(self):
         self.s.close()
+
+    def _reconnect(self):
+        self.s.close()
+        self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.s.connect((self.host, self.port))
 
     def readMultiple(self, registerStart, registerNum):
         register = intWord(registerStart)
@@ -43,8 +52,13 @@ class ModbusClient:
 
         dataSent = register + numReg
         self.send(0x03, dataSent)
-        resp = self.recv()
+        resp, err = self.recv()
+        if err:
+            logging.info("%s", err)
+            self._reconnect()
+            return []
 
+        fnCode = resp[0]
         numBytes = resp[1]
         data = []
         i = 2
@@ -54,7 +68,6 @@ class ModbusClient:
             i += 2
 
         return data
-
 
     def writeMultiple(self, registerStart, registerData):
         """
@@ -74,7 +87,10 @@ class ModbusClient:
         data = register + numReg + numBytes + values
 
         self.send(0x10, data)
-        resp = self.recv()
+        resp, err = self.recv()
+        if err:
+            logging.info("%s", err)
+            self._reconnect()
 
     def send(self, functionCode, data):
         """
@@ -98,12 +114,18 @@ class ModbusClient:
     def recv(self):
         resp = self.s.recv(1024)
 
-        if len(resp) < 7:
-            return []
+        if len(resp) < 6:
+            return [], ("%d %s %s" % (len(resp), resp, inspect.getframeinfo(inspect.currentframe())))
         msgLen = wordInt(resp[4:6])
-        moduleID = resp[6]
-        data = resp[7:]
-        return data
+        msg = resp[6:]
+        if len(msg) != msgLen:
+            return [], ("%d %d %s %s" % (len(msg), msgLen, resp, inspect.getframeinfo(inspect.currentframe())))
+
+        if len(msg) < 1:
+            return [], ("%d %s %s" % (len(msg), resp, inspect.getframeinfo(inspect.currentframe())))
+        moduleID = msg[0]
+        data = msg[1:]
+        return data, ""
 
 
 class ObjectDetectionPred:
