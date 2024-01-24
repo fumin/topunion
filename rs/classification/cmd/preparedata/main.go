@@ -56,7 +56,7 @@ func extract(img Image, box BoundingBox) image.Image {
 	// Enlarge image to accomodate random crop.
 	preprocessingRatio /= 0.8
 	// Enlarge image to accomodate random aspect ratio.
-	preprocessingRatio *= (4/3)
+	preprocessingRatio *= (4 / 3)
 	// Calculate the difference to enlarge.
 	ratio := (preprocessingRatio - 1) / 2
 	wd, hd := int(float64(box.Xmax-box.Xmin)*ratio), int(float64(box.Ymax-box.Ymin)*ratio)
@@ -139,12 +139,13 @@ func main() {
 
 func mainWithErr() error {
 	dstRoot := "data"
+	src := "PCB-DATASET"
+
 	dsts := make([]string, 0, 2)
 	for _, mode := range []string{"train", "test"} {
 		dsts = append(dsts, filepath.Join(dstRoot, mode))
 	}
 
-	src := "PCB-DATASET"
 	imgDir := filepath.Join(src, "images")
 	defectTypes, err := os.ReadDir(imgDir)
 	if err != nil {

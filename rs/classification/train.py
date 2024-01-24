@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 import sys
 
 import numpy as np
@@ -7,12 +8,25 @@ import torch
 import torchvision
 
 
+def visualize_imgs(out_dir, loader, mean, std):
+    for i, data in enumerate(loader):
+        inputs, label = data
+        for j in range(inputs.shape[0]):
+            normed = inputs[j]
+            for k in range(3):
+                normed[k] *= std[k]
+                normed[k] += mean[k]
+            fpath = os.path.join(out_dir, ("%d_%d.jpg" % (i, j)))
+            torchvision.utils.save_image(normed, fpath)
+        return
+
+
 class Model(torch.nn.Module):
     def __init__(self, num_classes):
         super().__init__()
         self.backbone = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14_reg')
-        for param in self.backbone.parameters():
-            param.requires_grad = False
+        # for param in self.backbone.parameters():
+        #     param.requires_grad = False
 
         hidden_size = 256
         self.linear0 = torch.nn.Linear(self.backbone.embed_dim, hidden_size)
@@ -110,20 +124,26 @@ def main():
     test_dataset = torchvision.datasets.ImageFolder(root="data/test", transform=test_transform)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=8)
 
-    model = Model(len(train_dataset.classes))
+    num_classes = len(train_dataset.classes)
+    model = Model(num_classes)
+    # import timm
+    # model = timm.create_model("vit_small_patch16_224", pretrained=True, num_classes=num_classes)
     model.cuda()
     loss_fn = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
 
+    # visualize_imgs("viz", train_loader, norm_mean, norm_std)
+    # return
+
     best_loss = sys.float_info.max
-    for epoch in range(100):
+    for epoch in range(300):
         train_loss = train_one_epoch(train_loader, model, loss_fn, optimizer)
         test_loss, test_acc = evaluate(test_loader, model, loss_fn)
         logging.info("epoch: %d, train: %f, test: %f, acc: %f", epoch, train_loss, test_loss, test_acc)
 
         if test_loss < best_loss:
             best_loss = test_loss
-            torch.save(model.state_dict(), "best_2layer_lr4")
+            torch.save(model.state_dict(), "best_trainbb_lr4")
 
         
 if __name__ == "__main__":
