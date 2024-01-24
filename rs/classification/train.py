@@ -132,6 +132,7 @@ def main():
     model = Model(num_classes)
     # import timm
     # model = timm.create_model("vit_small_patch16_224", pretrained=True, num_classes=num_classes)
+    # model = timm.create_model("vit_small_patch14_reg4_dinov2", pretrained=True, num_classes=num_classes)
     model.cuda()
     loss_fn = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
