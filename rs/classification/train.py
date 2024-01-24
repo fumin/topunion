@@ -25,18 +25,22 @@ class Model(torch.nn.Module):
     def __init__(self, num_classes):
         super().__init__()
         self.backbone = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14_reg')
-        # for param in self.backbone.parameters():
-        #     param.requires_grad = False
+        for param in self.backbone.parameters():
+            param.requires_grad = False
 
-        hidden_size = 256
-        self.linear0 = torch.nn.Linear(self.backbone.embed_dim, hidden_size)
-        self.linear1 = torch.nn.Linear(hidden_size, num_classes)
+        self.linear = torch.nn.Linear(self.backbone.embed_dim, num_classes)
+        self.linear.weight.data.normal_(mean=0, std=0.01)
+        self.linear.bias.data.zero_()
+        # hidden_size = 256
+        # self.linear0 = torch.nn.Linear(self.backbone.embed_dim, hidden_size)
+        # self.linear1 = torch.nn.Linear(hidden_size, num_classes)
 
     def forward(self, img):
         embed = self.backbone(img)
-        hidden = self.linear0(embed)
-        hidden = torch.nn.functional.relu(hidden)
-        logits = self.linear1(hidden)
+        logits = self.linear(embed)
+        # hidden = self.linear0(embed)
+        # hidden = torch.nn.functional.relu(hidden)
+        # logits = self.linear1(hidden)
         return logits
 
 
