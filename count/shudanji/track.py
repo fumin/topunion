@@ -30,7 +30,7 @@ from yolox.tracker.byte_tracker import BYTETracker
 
 
 class Handler:
-    def __init__(self, saveDir, maskers, predictor, trackers):
+    def __init__(self, saveDir, maskers, predictor, trackers, modbusC):
         self.disker = Disker(saveDir)
         self.maskers = maskers
         self.predictor = predictor
@@ -38,6 +38,8 @@ class Handler:
         self.isShow = True
 
         self.pauseOnNext = False
+
+        self.modbusC = modbusC
 
         self.debug = ""
 
@@ -408,6 +410,106 @@ def newTracker():
     t.t = tracker
     t.ids = {}
     return t
+
+
+class ModbusClient:
+    def __init__(self, host, port, moduleID):
+        self.moduleID = moduleID
+        self.txID = -1
+
+        self.host = host
+        self.port = port
+        self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.s.connect((host, port))
+
+    def close(self):
+        self.s.close()
+
+    def _reconnect(self):
+        self.s.close()
+        self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.s.connect((self.host, self.port))
+
+    def readMultiple(self, registerStart, registerNum):
+        register = intWord(registerStart)
+        numReg = intWord(registerNum)
+
+        dataSent = register + numReg
+        self.send(0x03, dataSent)
+        resp, err = self.recv()
+        if err:
+            logging.info("%s", err)
+            self._reconnect()
+            return []
+
+        fnCode = resp[0]
+        numBytes = resp[1]
+        data = []
+        i = 2
+        while i+1 < len(resp):
+            w = resp[i:i+2]
+            data.append(wordInt(w))
+            i += 2
+
+        return data
+
+    def writeMultiple(self, registerStart, registerData):
+        """
+        HeadHoldingRegister WritePoints NumberOfBytes DeviceData1 ... DeviceDataN
+        2 byte              2 byte      1 byte        2 byte          2 byte
+                                              |
+                                              |---->  |<---------n * 2--------->|
+        """
+        register = intWord(registerStart)
+        numReg = intWord(len(registerData))
+
+        values = []
+        for d in registerData:
+            values += intWord(d)
+
+        numBytes = intWord(len(values))[1:]
+        data = register + numReg + numBytes + values
+
+        self.send(0x10, data)
+        resp, err = self.recv()
+        if err:
+            logging.info("%s", err)
+            self._reconnect()
+
+    def send(self, functionCode, data):
+        """
+        TransactionID ProtocolID MessageLength ModuleID FunctionCode Data
+        2 byte        2 byte     2 byte        1 byte   1 byte       0-252 byte
+                                       |
+                                       |--->   |<---------------------->|
+        """
+        self.txID += 1
+
+        msg = [self.moduleID, functionCode] + data
+        msgLen = intWord(len(msg))
+
+        txID = intWord(self.txID)
+        protocolID = intWord(0)
+        frame = txID + protocolID + msgLen + msg
+
+        # logging.info("%s", " ".join("{:02x}".format(x) for x in frame))
+        self.s.sendall(bytes(frame))
+
+    def recv(self):
+        resp = self.s.recv(1024)
+
+        if len(resp) < 6:
+            return [], ("%d %s %s" % (len(resp), resp, inspect.getframeinfo(inspect.currentframe())))
+        msgLen = wordInt(resp[4:6])
+        msg = resp[6:]
+        if len(msg) != msgLen:
+            return [], ("%d %d %s %s" % (len(msg), msgLen, resp, inspect.getframeinfo(inspect.currentframe())))
+
+        if len(msg) < 1:
+            return [], ("%d %s %s" % (len(msg), resp, inspect.getframeinfo(inspect.currentframe())))
+        moduleID = msg[0]
+        data = msg[1:]
+        return data, ""
 
 
 class ViaRecorder():
@@ -882,7 +984,13 @@ def main():
         t = newTracker()
         trackers.append(t)
 
-    handler = Handler("nvr", maskers, predictor, trackers)
+    modbusHost = "192.168.1.111"
+    modbusPort = 502
+    modbusModuleID = 0x0F
+    # modbusC = ModbusClient(modbusHost, modbusPort, modbusModuleID)
+    modbusC = None
+
+    handler = Handler("nvr", maskers, predictor, trackers, modbusC)
     # handler.setDebug("motianlun1", frames)
 
     viaRecorder = ViaRecorder()
